@@ -17,6 +17,8 @@ Index of all contracts: [README.md](README.md).
 | P5 | Action settings are plain JSON inside the page manifest; global plugin settings are not in profiles | documented [R7](../references.md) | none needed (documented) |
 | P6 | `Open` actions store absolute paths in `Settings.path` | observed [R16](../references.md) | report any absolute path outside `{{HOME}}` |
 | P7 | Every file in a profile matches the allow-list below | observed | an unexpected file inside a profile folder trips the schema guard: a new file type means the format changed |
+| P9 | Instance identity: every action has an `ActionID`, and images are referenced by file name in `States[].Image`. A copy of the same content gets new `ActionID`s and new image file names | observed [R20](../references.md) | read-only: in a fixture pair (the same page copied twice), the normalized hashes are equal **only if** `ActionID` is dropped and image references are replaced by the image's content hash. Known-bad: hashing without that canonicalization must report the pair as different |
+| P10 | Two profiles on one host may carry the **same** `ActionID`s (needed if one setup is installed verbatim onto two same-geometry decks on one Mac) | **unknown** | restart tier: install a verbatim copy of a scratch profile onto a second same-geometry deck, relaunch, then check that both load and that the app didn't rewrite either copy's `ActionID`s. If the app rejects or rewrites them, installs must regenerate `ActionID`s deterministically (uuid5 of profile_id, deck_key, original id) |
 | P8 | Actions that switch to or open **another profile** (e.g. a switch-profile action) reference the target by that profile's **folder UUID**, and may also embed a device id | **likely, unverified** (review F46) | scan action settings for UUID-shaped values that match another local `.sdProfile` folder name, and for `@(` device ids. Report each reference with its key path. A matched profile reference is an inventory dependency (ADR [0013](../adr/0013-sync-scope-and-scripts.md)); a device id other than this copy's own refuses the push (ADR [0006](../adr/0006-normalization-and-variables.md)) |
 
 ## File allow-list
@@ -37,7 +39,8 @@ Known junk is **ignored silently** for hashing and copying: `.DS_Store`, sync-cl
 1. Take every allow-listed file. Paths are relative, use `/` as the separator, and are in Unicode **NFC**.
 2. For each `manifest.json`:
    - parse it as JSON;
-   - remove the strip-list fields (action `State`, `Pages.Current`, top-level `Device.UUID`), which are one named constant in the code;
+   - remove the strip-list fields (action `State`, `Pages.Current`, top-level `Device.UUID`, and every action's **`ActionID`** [R20](../references.md)), which are one named constant in the code;
+   - replace every image **reference** (`States[].Image` and any other `Images/<file>` value) with the referenced file's content hash, so identical images under different file names hash the same [R20](../references.md). Image files are still hashed by content, but **without their file names**;
    - **canonicalize it with RFC 8785 (JSON Canonicalization Scheme)**.
 
    A stored tree is already in placeholder form (variables and `{{DEVICE}}`). A local copy is first put into placeholder form (ADR 0006).
