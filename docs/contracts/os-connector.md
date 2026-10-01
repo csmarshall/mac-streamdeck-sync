@@ -1,0 +1,175 @@
+# Contract A: Go core ↔ OS connector
+
+Index of all contracts: [README.md](README.md).
+
+Everything an operating system must provide for schrodeck to run on it. **This file is the single source of truth for the port list.** Other documents link here instead of repeating it.
+
+The Go core (ADR [0018](../adr/0018-runtime-and-architecture.md)) contains all sync logic and never imports anything OS-specific. A **connector** is one adapter for each port below. macOS is the reference connector. Windows (or anything else) is a new connector: the core does not change.
+
+Status of the Windows column: **unverified research notes**, not tested. Treat each one as a starting point.
+
+## Ports
+
+Signatures are Go-flavored sketches. The real interfaces live in the code and must match this document. A change to one is a change to both, in the same PR.
+
+### 1. `Paths`: where things live
+
+```go
+type Paths interface {
+    AppDataRoot() string      // Stream Deck data dir (contains ProfilesV3/)
+    ProfilesDir() string      // <AppDataRoot>/ProfilesV3
+    PluginsDir() string
+    IconPacksDir() string
+    StateDir() string         // schrodeck runtime state: B hashes, history, journal
+    LogDir() string
+    ConfigPointer() string    // optional per-host store-path pointer (ADR 0010)
+    Home() string             // value of the built-in {{HOME}} variable (ADR 0006)
+    StoreCandidates() []string // auto-detected sync folders, in preference order (ADR 0010)
+}
+```
+| | macOS | Windows (unverified) |
+|---|---|---|
+| AppDataRoot | `~/Library/Application Support/com.elgato.StreamDeck` [R1](../references.md) | `%APPDATA%\Elgato\StreamDeck` (community sources) |
+| StateDir / LogDir | `~/Library/Application Support/schrodeck`, `~/Library/Logs/schrodeck` | `%LOCALAPPDATA%\schrodeck` |
+| StoreCandidates | `~/.dropbox/info.json` path, iCloud Drive | Dropbox `info.json` (`%LOCALAPPDATA%\Dropbox`), OneDrive (`%OneDrive%`) |
+
+Invariant: StateDir and ProfilesDir are on volumes where the core can create sibling temp dirs, so that renames are atomic (see Filesystem guarantees).
+
+### 2. `HostIdentity`: stable id for this host and user
+
+```go
+type HostIdentity interface {
+    HardwareID() (string, error) // stable across renames and OS reinstalls
+    UserName() string
+    FriendlyName() string        // default display name for the registry
+}
+```
+The core derives `host_id = sha256(HardwareID + ":" + UserName)[:12]` (ADR [0010](../adr/0010-host-identity-and-config-layering.md)). The raw HardwareID is never logged or stored.
+
+| | macOS | Windows (unverified) |
+|---|---|---|
+| HardwareID | `IOPlatformUUID` | `HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid` (note: it changes on OS reinstall, which is weaker than macOS) |
+| FriendlyName | `ComputerName` | `COMPUTERNAME` |
+
+### 3. `AppControl`: the Stream Deck app process
+
+```go
+type AppControl interface {
+    Installed() (bool, error)
+    Running() (bool, error)
+    Quit(timeout time.Duration) error   // graceful; error if still running at timeout
+    Launch() error                      // background, no focus steal
+    WaitSettled(quietFor, max time.Duration) error // process up AND ProfilesDir stopped changing
+}
+```
+Invariants: `Quit` must be **graceful**, so the app flushes its in-memory state first, never a kill. `Quit` returning nil guarantees that no app process can write ProfilesDir afterwards. The two-phase apply (ADR [0008](../adr/0008-two-phase-apply.md)) depends on that.
+
+| | macOS | Windows (unverified) |
+|---|---|---|
+| Quit | `osascript -e 'quit app "Elgato Stream Deck"'`, poll the pid | `WM_CLOSE` to the main window, or the tray-exit path; must not be `TerminateProcess` |
+| Launch | `open -gj -a "Elgato Stream Deck"` | `StreamDeck.exe` from its install path, minimized |
+
+### 4. `DeviceEnumerator`: this host's decks
+
+```go
+type Deck struct {
+    AppDeviceID string // the app's own id (e.g. Device.UUID); local only
+    Geometry   Geometry // columns, rows, dials (from Elgato's DeviceType table [R8](../references.md))
+    Model      string
+    Virtual    bool
+    SerialHash string // optional, informational (ADR 0003); "" if unknown
+}
+type DeviceEnumerator interface { Decks() ([]Deck, error) }
+```
+Source: the app's own device list (prefs + manifests), not USB. Same on every OS in principle, but the prefs **format** differs (see `AppPrefs`).
+
+### 5. `AppPrefs`: app version and per-deck selected profile (read-only)
+
+```go
+type AppPrefs interface {
+    AppVersion() (string, error)              // for the schema guard (ADR 0015)
+    SelectedProfile(appDeviceID string) (string, error) // ESDProfilesPreferred [R14](../references.md); read-only, never written (ADR 0019)
+    DeviceRecords() ([]map[string]any, error) // raw device entries, for DeviceEnumerator
+}
+```
+| | macOS | Windows (unverified) |
+|---|---|---|
+| Store | `~/Library/Preferences/com.elgato.StreamDeck.plist` | registry `HKCU\Software\Elgato Systems GmbH\StreamDeck` (the at-scale article uses this key [R3](../references.md)) |
+| AppVersion | app bundle `Info.plist` `CFBundleShortVersionString` | file version of `StreamDeck.exe` |
+
+### 6. `Watcher`: change notification
+
+```go
+type Watcher interface {
+    Watch(paths []string, debounce time.Duration) (<-chan Event, error)
+}
+```
+Invariant: **events are hints, never truth.** The core always re-hashes, so missed or duplicated events are safe. The timer (via `Scheduler`) is the safety net (ADR [0012](../adr/0012-triggers.md)).
+
+| | macOS | Windows (unverified) |
+|---|---|---|
+| | FSEvents; launchd `WatchPaths` when not resident | `ReadDirectoryChangesW` |
+
+### 7. `Scheduler`: running unattended
+
+```go
+type Scheduler interface {
+    Install(spec AgentSpec) error   // triggers: watch paths, interval, optional device-attach
+    Uninstall() error
+    Status() (AgentStatus, error)   // for `doctor` and `install --check`
+}
+```
+| | macOS | Windows (unverified) |
+|---|---|---|
+| | LaunchAgent plist (`WatchPaths`, `StartInterval`, `LaunchEvents` IOKit for attach) | Task Scheduler (logon + interval) or a per-user startup entry; device-attach via WMI/`RegisterDeviceNotification` (optional) |
+
+### 8. `Notifier`: user-visible notifications
+
+```go
+type Notifier interface {
+    Available() bool               // false → the core falls back to log-only plus `status`
+    Notify(n Notification) error   // title, body, severity, persistent?
+}
+```
+| | macOS | Windows (unverified) |
+|---|---|---|
+| | Swift helper app in `~/Applications` (ADR [0016](../adr/0016-notifications.md)); it must be installed there, or the OS refuses with no prompt | Toast notifications (needs an AppUserModelID / Start-menu shortcut) |
+
+### 9. `StoreSync`: is the shared folder current?
+
+```go
+type Freshness int // Fresh | InFlight | Conflict | Unknown
+type StoreSync interface {
+    ReadFreshness(paths []string) (Freshness, error)  // before reading the store
+    PushConfirmed(paths []string) (bool, error)       // after writing: uploaded?
+    EnsureDownloaded(paths []string) error            // pull online-only placeholders
+}
+```
+`Unknown` is a valid answer: the core then relies only on the store protocol's in-flight check (ADR [0009](../adr/0009-store-write-protocol.md)), and `status` says freshness is unknown.
+
+| | macOS | Windows (unverified) |
+|---|---|---|
+| | File Provider ubiquitous-item URL keys (ADR [0023](../adr/0023-store-freshness-via-file-provider.md)) | Cloud Files API (`CfGetPlaceholderStateFromFindData`, sync-state properties) as used by OneDrive/Dropbox |
+
+## Filesystem guarantees the core assumes
+
+These are not ports. They are properties a connector must **confirm** (by passing the conformance tests below) or **work around** inside its adapters:
+
+- **Atomic same-volume rename** of a directory onto a fresh name. Windows can't rename over an existing directory, so the core uses rename-aside-then-rename-in. That must work.
+- **Exclusive advisory lock** on a lock file (`flock` on macOS; `LockFileEx` on Windows).
+- **fsync** of a file and its directory for the apply journal.
+- **Path separators and case:** canonicalization uses `/` and is case-sensitive. A case-insensitive filesystem (default on both macOS and Windows) must not produce two store paths that differ only by case.
+- **Home-path canonicalization** (`{{HOME}}`) uses `Paths.Home()`, including Windows drive letters and backslashes.
+- **Cross-OS sharing is out of scope for v1.** Profiles that embed OS-specific paths or plugins won't work on the other OS even if the sync succeeds. Variables can bridge simple path differences.
+
+## Conformance
+
+Every connector must pass the shared **conformance suite**: tests written once against these interfaces and run against each real adapter on its OS's CI runner. At minimum:
+
+- `AppControl`: quit-then-check-not-running; quit timeout returns an error and leaves the app running; launch + settle.
+- `Watcher`: a write produces an event; a burst within the debounce window produces one event.
+- `StoreSync`: a local non-synced file returns `Unknown` (known-bad control); a provider file returns a non-Unknown state.
+- `HostIdentity`: stable across two calls and two processes; differs across two users on one host.
+- Filesystem guarantees: rename-aside/rename-in under a concurrent reader; the lock excludes a second process; journal fsync survives a simulated crash (kill between steps).
+
+A connector that can't pass a test documents why, and what the core does instead (e.g. `Notifier.Available() == false`).

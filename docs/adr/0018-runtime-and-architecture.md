@@ -9,16 +9,7 @@ The work is mostly sync and analysis: hashing, JSON canonicalization, store prot
 ## Decision
 
 - **Go** for all sync logic and the CLI. The CLI emits `--json` output, which is the contract for any UI.
-- **Six OS ports** (interfaces), each with a macOS adapter:
-
-| Port | macOS adapter |
-|---|---|
-| AppControl (quit / relaunch / is-running) | `osascript` + `open` |
-| DeviceEnumerator (local decks + geometry) | app preferences and manifests ([0003](0003-decks-are-local-geometry-compatibility.md)) |
-| Watcher | FSEvents / launchd WatchPaths |
-| Notifier | Swift helper app ([0016](0016-notifications.md)) |
-| AppPrefs (app version, selected profile) | plist |
-| Scheduler | launchd plists |
+- **OS ports** (interfaces) with one adapter set per OS, called a **connector**. The port list, signatures, invariants and filesystem guarantees live in exactly one place: [contract A, os-connector.md](../contracts/os-connector.md) (ADR [0024](0024-documented-contracts.md)). The macOS connector is the reference.
 
 - **Swift only at the edges:** the notifier now, and a SwiftUI menu-bar app later that talks to the CLI.
 - **Windows later** = a new adapter set. The core does not change.

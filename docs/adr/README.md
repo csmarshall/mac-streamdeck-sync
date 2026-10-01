@@ -21,7 +21,10 @@ Each ADR records one decision, the alternatives rejected, and **how a violation 
 | [0015](0015-schema-guard.md) | Schema guard | Accepted | App version + profile `Version` + key fingerprint; pause until `doctor` passes |
 | [0016](0016-notifications.md) | Notifications | Accepted | Own Swift helper in `~/Applications`, original icon, osascript fallback |
 | [0017](0017-observability.md) | Observability | Accepted | Local log + per-host event trail; timestamps display-only |
-| [0018](0018-runtime-and-architecture.md) | Runtime and architecture | Accepted | Go core + 6 OS ports; Swift only at the edges |
+| [0018](0018-runtime-and-architecture.md) | Runtime and architecture | Accepted | Go core + per-OS connectors ([contract A](../contracts/os-connector.md)); Swift only at the edges |
 | [0019](0019-selected-profile-stays-per-host.md) | Selected profile | Accepted | Never sync or write the selected profile |
 | [0020](0020-project-hygiene-naming-license.md) | Naming, license, hygiene | Accepted | schrodeck; MPL-2.0 + CLA; leak scan before every push |
 | [0021](0021-who-may-push.md) | Who may push | Accepted | Any host whose copy changed since last sync (L ≠ B), attached or not |
+| [0022](0022-onboarding-init-and-join.md) | Onboarding | Accepted | `init` on the first host; `join <dir>` previews every change, then runs the first sync in the foreground; suggested profile name `schrodeck · <name> · <cols>×<rows>` |
+| [0023](0023-store-freshness-via-file-provider.md) | Store freshness | Accepted | Ask the provider via File Provider keys: read only when `current`, a push counts once uploaded, a provider conflict counts as Diverged |
+| [0024](0024-documented-contracts.md) | Documented contracts | Accepted | Five contracts (connector, client per OS, profile format, store format, `--json`), each with one home, an owner and an enforcement mechanism |

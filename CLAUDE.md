@@ -13,6 +13,8 @@
 - **MPL-2.0 Exhibit A header on every source file.** Outside code contributions need a CLA (see CONTRIBUTING.md).
 - Design sources of truth: `docs/adr/` (decisions) and `docs/specs/2026-10-01-sync-design.md` (narrative). Facts about the app are cited from `docs/references.md` as documented vs observed. Diagrams render with `mmdc` and are looked at before commit; `direction TB` only.
 
+- **Contracts (ADR 0024):** five documented contracts in `docs/contracts/`. For ours (A connector, D store format, E `--json`), the code and the doc change in the same PR and breaking changes bump the version. For Elgato's (B client per OS, C profile format), rows change only with evidence: a passing `schrodeck doctor` or a cited source.
+
 ## Workflow
 
 1. Issue first (`gh issue create`).
@@ -24,5 +26,5 @@
 
 ## Toolchain
 
-- **Go** core and CLI (ADR 0018): all sync logic behind six OS ports (AppControl, DeviceEnumerator, Watcher, Notifier, AppPrefs, Scheduler). macOS adapters now; Windows is a future adapter set. Core tests use fake adapters and run on Linux. Tools: gofmt, go vet, staticcheck, go test.
+- **Go** core and CLI (ADR 0018): all sync logic behind OS ports. The port list lives ONLY in `docs/contracts/os-connector.md` (contract A); never restate it or its count elsewhere. macOS adapters now; Windows is a future adapter set. Core tests use fake adapters and run on Linux. Tools: gofmt, go vet, staticcheck, go test.
 - **Swift** only at the edges: `SchrodeckNotifier.app` (UserNotifications, built + ad-hoc signed by `install.sh`, installed into `~/Applications`, which is required for notifications to work), and later a SwiftUI menu-bar app.

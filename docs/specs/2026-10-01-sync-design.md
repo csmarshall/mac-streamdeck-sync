@@ -60,6 +60,17 @@ Observed on Stream Deck 7.4.2–7.5.1, macOS. The schema guard re-checks them af
 
 ## User workflow
 
+Onboarding (ADR [0022](../adr/0022-onboarding-init-and-join.md)):
+
+```
+host A:  schrodeck init                     # preflight the app; pick the shared dir and profile(s);
+                                          # offer to rename to "schrodeck · Work · 8×4"; first push
+host B:  schrodeck join <dir>               # preflight; DRY-RUN rundown of every change; confirm;
+                                          # first sync runs in the foreground; then the agent is installed
+```
+
+Day to day:
+
 ```
 host A:  schrodeck share "Work"              # opt in; published to the store
 host B:  (notification: "Shared profile Work (8×4) is available")
@@ -155,6 +166,8 @@ Changing the app's files is surgery on a live system. **The app restart is the c
 A run that finds a leftover journal completes the swap or restores the snapshot; it never guesses. **The selected profile on each deck is never read or written for sync** ([R14]), so after the restart each deck shows what it showed before, and Smart Profiles keep switching locally ([R13]).
 
 ## The store
+
+Before reading the store and after writing it, schrodeck asks the sync provider for each file's state via File Provider: read only when every file is `current`; a push is confirmed once every file is uploaded; a provider conflict counts as Diverged. The limit: `current` means the newest version *this host knows of* (ADR [0023](../adr/0023-store-freshness-via-file-provider.md)).
 
 ADR [0009](../adr/0009-store-write-protocol.md), [0010](../adr/0010-host-identity-and-config-layering.md).
 
@@ -284,18 +297,7 @@ ADR [0017](../adr/0017-observability.md).
 
 ADR [0018](../adr/0018-runtime-and-architecture.md).
 
-A **Go** core holds all sync logic: normalization, the 3-way compare, the store protocol, history, inventory, bindings, variables and backoff. It also holds the CLI and its `--json` output. Everything OS-specific sits behind six ports:
-
-| Port | macOS adapter | Future Windows adapter (unverified) |
-|---|---|---|
-| AppControl | `osascript` quit + `open` relaunch | process API |
-| DeviceEnumerator | app prefs + manifests | the same data under `%APPDATA%` |
-| Watcher | launchd WatchPaths / FSEvents | ReadDirectoryChangesW |
-| Notifier | Swift `SchrodeckNotifier.app` | toast API |
-| AppPrefs | plist | registry |
-| Scheduler | launchd plists | Task Scheduler |
-
-Swift exists only at the edges: the notifier now, and a SwiftUI menu-bar app later that talks to the CLI. Core tests run on Linux CI with fake adapters, and adapter tests run on macOS runners.
+A **Go** core holds all sync logic: normalization, the 3-way compare, the store protocol, history, inventory, bindings, variables and backoff. It also holds the CLI and its `--json` output. Everything OS-specific sits behind ports, implemented once per OS as a **connector**. The port list, invariants and filesystem guarantees are [contract A](../contracts/os-connector.md). What each connector assumes about the Stream Deck app is [contract B](../contracts/client-os.md), and the profile format the core relies on is [contract C](../contracts/profile-format.md). All five contracts and their enforcement: [contracts index](../contracts/README.md) (ADR [0024](../adr/0024-documented-contracts.md)). Swift appears only at the macOS edges (notifier now, a SwiftUI menu-bar app later), and both talk to the core through contract E, the `--json` CLI.
 
 ## Testing
 
