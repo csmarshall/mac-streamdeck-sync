@@ -48,7 +48,7 @@ Configuration has three layers. Each fact has exactly one home:
 |---|---|---|---|
 | **Host identity** | derived at runtime, never stored as config | `host_id = sha256(IOPlatformUUID + ":" + username)[:12]` | yes, but computed |
 | **Local pointer** | `~/.config/mac-streamdeck-sync/config.toml` (optional) | `store = "<path>"`: where the shared directory is mounted *on this Mac* | yes: path only |
-| **Common config** | `<store>/config.toml` | deck allowlist, snapshot retention, script-replication map, notification prefs, host registry (`host_id → friendly name`) | no: one copy, shared by all hosts |
+| **Common config** | `<store>/config.toml` | deck allowlist, `retention` (restore points per deck, default 20), script-replication map, notification prefs, host registry (`host_id → friendly name`) | no: one copy, shared by all hosts |
 
 - **Why hardware + username:** `IOPlatformUUID` survives renames and OS reinstalls; `ComputerName`/hostname are user-editable and can collide. Stream Deck profiles are per macOS user, so two accounts on one Mac are two hosts. A new logic board or a new Mac gets a new `host_id` and starts as a clean FirstRun, which is safe by construction.
 - **Store discovery order:** `--store` flag → local pointer → Dropbox's `~/.dropbox/info.json` (`personal`/`business` path) + `/mac-streamdeck-sync` → iCloud Drive `~/Library/Mobile Documents/com~apple~CloudDocs/mac-streamdeck-sync`. More than one candidate containing a store `FORMAT` file → refuse and ask. Never guess between two stores.
@@ -109,17 +109,33 @@ This scales to N Macs without clocks or coordination. Each Mac keeps only its ow
 ## Applying a pull (always automatic)
 
 1. Stage: build the expanded tree (`~` → this `$HOME`) in a scratch dir and verify its hash.
-2. Back up the current local deck tree to `pre-swap/<ts>/`.
+2. Snapshot the current local deck tree into the local history ring (`pre-pull`).
 3. Quit: `osascript -e 'quit app "Elgato Stream Deck"'`, then wait for the process to exit (timeout → abort, nothing touched).
 4. Swap: rename the old tree aside and rename the staged tree in. Both live on the same volume, so each rename is atomic.
 5. Relaunch: `open -gj -a "Elgato Stream Deck"`.
-6. Verify: after the app settles, re-hash. L ≠ R → restore the pre-swap tree, then quit/relaunch again, and notify.
+6. Verify: after the app settles, re-hash. L ≠ R → restore that `pre-pull` entry, then quit/relaunch again, and notify.
 
 ## Triggers
 
 - **Deck attach:** a LaunchAgent with `LaunchEvents` → `com.apple.iokit.matching` on `idVendor = 0x0fd9`. It fires when the switch hands the deck to this Mac, which is exactly when Behind matters.
 - **Timer:** `StartInterval` of about 15 min, to push edits made while attached.
-- **CLI:** `sdsync status | sync | push | pull | resolve --keep local|remote|<snapshot> | inventory | doctor`.
+- **CLI:** `sdsync status | sync | push | pull | resolve --keep local|remote|<snapshot> | history | rollback | hold | resume | inventory | doctor`.
+
+## History and rollback
+
+Two independent rings of restore points per deck, both sized by `retention` in the common config (default **20**, one value shared by all hosts):
+
+| Ring | Where | Written | Survives |
+|---|---|---|---|
+| **Local** | `~/Library/Application Support/mac-streamdeck-sync/history/<deck>/<ts>-<reason>/` | before every pull, rollback, and resolve, and after every push (the tree as published) | a corrupted or deleted shared store |
+| **Shared** | `<store>/decks/<deck>/snapshots/<ts>-<host_id>/` | every push, and both sides of every diverge | losing or replacing a Mac |
+
+- Each entry carries a small `meta.json`: normalized hash, reason (`pre-pull`, `pushed`, `pre-rollback`, `diverged-local`, `diverged-remote`), host, app version, timestamp.
+- Rotation is by count only. It keeps the newest `retention` entries and **never** removes the entry matching the current R or this host's B, so the live state always has a restore point.
+- `sdsync history [--deck D]` lists both rings with a short id, age, host, reason and hash. Entries with the same hash collapse into one line.
+- `sdsync rollback <id> [--deck D]` stages the chosen entry, takes a `pre-rollback` local snapshot, then applies it with the normal quit → swap → relaunch → verify path. Afterwards L ≠ B, so the next sync is **Ahead** and the rollback is **pushed as a new generation**. Every Mac converges on it, and nothing in the history is rewritten.
+- `sdsync rollback <id> --hold` applies the rollback locally and pauses automatic sync **for that deck on this host** until `sdsync resume`. Use it to try an old config without publishing it. While held, `status` and notifications say so. Without a hold, the next tick would see the rollback as a local edit and push it, which is right for "this config broke, revert everywhere" and wrong for "let me just look".
+- A rollback never deletes anything. Rolling back to a rollback is an ordinary rollback.
 - A single lock file (`flock`-style) keeps triggers from overlapping.
 
 ## Inventory and scripts
@@ -141,7 +157,7 @@ Replicating scripts through a cloud folder means **running code that arrived fro
 
 - **Schema guard:** refuse to run if the app version or the manifest key set differs from the known set, until `sdsync doctor` passes and the user confirms.
 - **Dry run** builds everything in a scratch dir and writes nothing beside the target (not even mtimes).
-- Never delete a snapshot or pre-swap backup automatically except by count-based rotation (keep the last N).
+- Never delete a snapshot or local history entry automatically except by count-based rotation (`retention`, see History and rollback).
 - Logs: timestamp, level, deck short-hash, state, action. `SDSYNC_LOG_LEVEL` sets the level. No tokens or full device IDs in logs.
 - Notifications through `osascript display notification` (no extra dependency).
 
@@ -155,5 +171,4 @@ Replicating scripts through a cloud folder means **running code that arrived fro
 
 1. **Is `Device.UUID` the same on every Mac for the same physical deck?** It looks derived from the serial, which would make it portable, but this has not been checked on a second Mac. If it is host-specific, the deck key becomes `Model + serial` read from IOKit.
 2. **Can you edit a deck's profile while that deck is not attached?** If yes, "only the attached Mac pushes" would block real edits, and pushes should be gated on L ≠ B alone.
-3. Snapshot retention N (proposed: 20 per deck).
-4. License (proposed: MIT).
+3. License (proposed: MIT).
