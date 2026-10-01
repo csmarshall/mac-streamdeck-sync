@@ -2,9 +2,9 @@
 
 *Your Stream Deck profile is in superposition across every Mac it has been on, until you attach a deck and it collapses into the latest state.*
 
-Keep Elgato Stream Deck profiles in sync across several computers, including different physical decks of the same model, for example through a Thunderbolt or KVM switch, using nothing but a shared cloud folder (Dropbox, iCloud Drive, …).
+Keep Elgato Stream Deck profiles in sync across several computers, including different physical decks with the same layout size, for example through a Thunderbolt or KVM switch, using nothing but a shared cloud folder (Dropbox, iCloud Drive, …).
 
-> **Status: design phase.** No working code yet. See the [design spec](docs/specs/2026-10-01-sync-design.md).
+> **Status: design phase.** No working code yet. See the [design spec](docs/specs/2026-10-01-sync-design.md) and the [architecture decision records](docs/adr/README.md).
 
 ## The problem
 
@@ -12,11 +12,13 @@ You edit a profile on Mac A, flip the switch, and Mac B shows yesterday's layout
 
 ## The approach
 
-- A small CLI (`sdsync`) runs on every Mac from a LaunchAgent. It triggers when the deck is attached, on a timer, or by hand.
-- For each deck, it compares **normalized content hashes** of the local profiles, the shared copy, and the last state this Mac synced. That tells it whether this Mac is behind, ahead, in sync, or diverged without trusting file timestamps or clocks. The app rewrites its own files on every launch, so timestamps are useless here.
-- Behind → quit the app, swap in the shared profiles, relaunch. Ahead → publish atomically to the shared folder. Diverged → keep both, touch nothing, notify.
-- Paths under your home folder are made portable, because usernames differ between Macs. It also reports which plugins, icon packs, Shortcuts, and scripts each deck needs and whether this Mac has them.
-- No network connection between the Macs is needed.
+- You opt profiles in: `schrodeck share "Work"` on one machine, `schrodeck subscribe "Work"` on the others. The subscription can go onto any local deck with the same geometry (columns × rows, dials), including a virtual deck. Profiles you don't share are never touched.
+- A small CLI (`schrodeck`, written in Go) runs on every machine from launchd. It runs when profile files or the shared folder change, on a safety timer, or by hand. It can optionally also run on deck attach.
+- For each shared profile, it compares **normalized content hashes** of the local copy, the shared copy, and the last state this machine synced. That tells it whether this machine is behind, ahead, in sync, or diverged without trusting file timestamps or clocks. The app rewrites its own files on every launch, so timestamps are only shown, never used to decide.
+- Behind → plan and verify the change first, then quit the app, swap in the update, relaunch, and verify. If verification fails, roll back. Ahead → publish atomically to the shared folder. Diverged → keep both, touch nothing, notify.
+- Per-machine differences such as your home folder, or a service URL that differs on a firewalled machine, are handled with variables, so they never count as edits. It also reports which plugins, icon packs, Shortcuts, and scripts a profile needs and whether this machine has them.
+- Repeated changes back off exponentially, so a bug can't turn into a restart loop.
+- No network connection between the machines is needed. macOS first; the OS-specific parts sit behind interfaces so other platforms can be added later.
 
 ![sync state diagram](docs/sync-states.png)
 

@@ -29,6 +29,17 @@ B = last hash this host synced for this copy (local state)
 
 **No decision ever reads a file mtime or a wall-clock timestamp.**
 
+### Timestamps: recorded as metadata, display-only
+
+Every copy's local state and every `current.json` carry `last_updated` (UTC, ISO-8601) and `updated_by` (host friendly name + `host_id`). They appear in `schrodeck status`, in notifications ("updated by <host> 4 min ago"), and in the log and event trail ([0017](0017-observability.md)).
+
+They are **never used to decide direction**. "This machine is newer than the mount" is put into practice as **"this copy changed since the last sync" (L ≠ B)**, not as "this copy's timestamp is later". Clock comparison fails in two ways seen here:
+
+- the app touches files with no user edit ([R15](../references.md)), so a later mtime doesn't mean newer content;
+- host clocks can disagree, so a later timestamp from another host doesn't mean a later edit.
+
+At worst, clock skew makes the displayed ages look wrong. It never changes what is pushed or applied.
+
 ## Consequences
 
 - Good: scales to any number of hosts with no coordination. Each host stores only its own B.
