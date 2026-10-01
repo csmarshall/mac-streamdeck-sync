@@ -3,7 +3,7 @@
 ## Golden rules
 
 - **PUBLIC REPO.** Never commit hostnames, usernames, home paths of real machines, device serials/`Device.UUID` values, plugin tokens, or real profile manifests. Fixtures are redacted by hand. Use `<user>`, `<host>`, `<deck>` placeholders in docs.
-- **Shared tool vs local overlay.** Repo = the tool, templates, docs. Anything specific to one machine lives in `~/.config/mac-streamdeck-sync/config.toml` and `~/Library/Application Support/mac-streamdeck-sync/`. Never the repo.
+- **Shared tool vs local overlay.** Repo = the tool, templates, docs. Host identity is derived (hash of IOPlatformUUID + username), never configured. The only per-host config is the store path pointer in `~/.config/mac-streamdeck-sync/config.toml`. Every other setting lives once in `<store>/config.toml`, shared by all hosts. Runtime state lives in `~/Library/Application Support/mac-streamdeck-sync/`. None of it goes in the repo.
 - **Never trust mtime** for direction. The Stream Deck app rewrites manifests on launch. Direction comes from the 3-way normalized-hash compare in the spec.
 - **Never touch ProfilesV3 while the app is running.** Quit → swap → relaunch, with a pre-swap backup.
 - **Stop, don't guess.** Unknown app version or manifest schema → refuse, until `sdsync doctor` passes.

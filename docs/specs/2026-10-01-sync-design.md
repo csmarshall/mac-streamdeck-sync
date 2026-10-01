@@ -40,31 +40,44 @@ Observed on Stream Deck 7.4.2 to 7.5.1, macOS. Re-verify after each app update. 
 | The app writes its own `.streamDeckProfilesBackup` (a stored zip) into `BackupV3/`. | Every push also writes one, as a manual recovery path using Elgato's own import. |
 | Elgato USB vendor ID is `0x0fd9` (4057). | launchd IOKit matching can fire on deck attach. |
 
-## Architecture: shared tool plus local overlay
+## Architecture: shared tool, common config, thin local pointer
+
+Configuration has three layers. Each fact has exactly one home:
+
+| Layer | Where | Holds | Differs per host? |
+|---|---|---|---|
+| **Host identity** | derived at runtime, never stored as config | `host_id = sha256(IOPlatformUUID + ":" + username)[:12]` | yes, but computed |
+| **Local pointer** | `~/.config/mac-streamdeck-sync/config.toml` (optional) | `store = "<path>"`: where the shared directory is mounted *on this Mac* | yes: path only |
+| **Common config** | `<store>/config.toml` | deck allowlist, snapshot retention, script-replication map, notification prefs, host registry (`host_id → friendly name`) | no: one copy, shared by all hosts |
+
+- **Why hardware + username:** `IOPlatformUUID` survives renames and OS reinstalls; `ComputerName`/hostname are user-editable and can collide. Stream Deck profiles are per macOS user, so two accounts on one Mac are two hosts. A new logic board or a new Mac gets a new `host_id` and starts as a clean FirstRun, which is safe by construction.
+- **Store discovery order:** `--store` flag → local pointer → Dropbox's `~/.dropbox/info.json` (`personal`/`business` path) + `/mac-streamdeck-sync` → iCloud Drive `~/Library/Mobile Documents/com~apple~CloudDocs/mac-streamdeck-sync`. More than one candidate containing a store `FORMAT` file → refuse and ask. Never guess between two stores.
+- **The local pointer is the only per-host config**, and it holds a path, not settings. Anything else a user wants to set goes in the common config, so a change made on one Mac applies on all of them. The CLI's `sdsync config set` writes the common config with the same temp → verify → rename discipline as profile pushes.
+- **Hosts register themselves:** on first run a host adds its `host_id` (+ friendly name, default `ComputerName`) to the registry. Snapshots, inventory files and notifications name hosts by friendly name. Store paths use `host_id`.
 
 ```
 repo (public)                      per-Mac, never committed
-├── sdsync (Python CLI)            ~/.config/mac-streamdeck-sync/config.toml
-├── launchd/ plist templates         store path, host id, deck allowlist,
-├── install.sh                       script replication map, notify prefs
-└── docs/                          ~/Library/Application Support/mac-streamdeck-sync/
-                                     state.json (B hashes per deck), logs, pre-swap backups
+├── sdsync (Python CLI)            ~/.config/mac-streamdeck-sync/config.toml   (store path only, optional)
+├── launchd/ plist templates       ~/Library/Application Support/mac-streamdeck-sync/
+├── install.sh                       state.json (B hashes per deck), logs, pre-swap backups
+└── docs/
 ```
 
-The repo holds no host names, usernames, device serials or tokens. Everything specific to one Mac lives in the local overlay. `install.sh` renders the LaunchAgent from a template and copy-deploys it, with no symlinks. `install.sh --check` reports drift.
+The repo holds no host names, usernames, device serials or tokens. `install.sh` renders the LaunchAgent from a template and copy-deploys it, with no symlinks. `install.sh --check` reports drift.
 
 ## Shared store layout
 
 ```
 <store>/                                  e.g. ~/Dropbox/mac-streamdeck-sync
 ├── FORMAT                                store schema version (refuse unknown)
+├── config.toml                           common config (see Architecture)
 ├── decks/<device-uuid-hash>/
 │   ├── current/                          normalized .sdProfile tree(s) for this deck
 │   ├── current.json                      {hash, pushed_by, pushed_at, app_version, model}
-│   └── snapshots/<ts>-<host>/            last N pushes plus every diverged pair
-├── inventory/<host>.json                 per-host: plugins, icon packs, script checks
+│   └── snapshots/<ts>-<host_id>/         last N pushes plus every diverged pair
+├── inventory/<host_id>.json              per-host: plugins, icon packs, script checks
 ├── icon-packs/<id>.sdIconPack/           replicated (see Inventory)
-└── backups/<ts>-<host>.streamDeckProfilesBackup
+└── backups/<ts>-<host_id>.streamDeckProfilesBackup
 ```
 
 - Directory names use a short hash of `Device.UUID`, so serial-like IDs never appear in a folder name. Any shared folder can end up being sent somewhere else.
@@ -117,12 +130,12 @@ Each run writes `inventory/<host>.json` and reports differences from the deck's 
 |---|---|---|---|
 | Plugins | action `UUID` prefixes vs `Plugins/*.sdPlugin` | installed? version? | report only |
 | Icon packs | `IconPacks/*.sdIconPack` | present? | copy via store (about 70 MB, only when changed) |
-| File scripts/apps | `system.open` `path` | exists after `~` expansion? executable? | per the local `script replication map`: `managed-elsewhere` (dotfiles repo etc., report only) or `store` (copied from `<store>/scripts/`) |
+| File scripts/apps | `system.open` `path` | exists after `~` expansion? executable? | per the common config's `script replication map`: `managed-elsewhere` (dotfiles repo etc., report only) or `store` (copied from `<store>/scripts/`) |
 | Shortcuts | `shortcut.run` `shortcutName` | listed by `shortcuts list`? | report only (iCloud syncs Shortcuts) |
 | BetterTouchTool | `com.folivora.btt.action` `btt_identifier` | report the id | report only (BTT owns its config) |
 | Other plugin-backed | everything else | plugin present | report only |
 
-Replicating scripts through a cloud folder means **running code that arrived from a sync service**. It is off by default, per path, opted in from the local config, and copied files keep a hash that is checked before each run.
+Replicating scripts through a cloud folder means **running code that arrived from a sync service**. It is off by default, opted in per path in the common config, and copied files keep a hash that is checked before each run.
 
 ## Safety rails
 
