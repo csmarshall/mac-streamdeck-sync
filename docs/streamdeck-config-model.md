@@ -100,6 +100,19 @@ Consequence for schrodeck: "the same setup" has to mean **the same content**, no
 
 ## How schrodeck maps onto this
 
+**The app has no device-type → profile relationship.** Profiles hang off individual devices (device 1 → N profiles, each profile → exactly one device). Two XLs, even on the same computer, each own separate profiles. The only type-level grouping Elgato has is for **profile templates** (plugin-bundled or Marketplace profiles declare a `DeviceType` [SDK profiles guide](https://docs.elgato.com/streamdeck/sdk/guides/profiles)), and installing one still creates an ordinary per-device copy.
+
+So a "the same setup on every XL" layer **doesn't exist in the app**, and schrodeck has to provide it: a **setup** (keyed by geometry) holds the content, and each enrolled device on each computer gets its own materialized copy (new folder ids, `{{DEVICE}}` bound to that device). Equality between copies is judged on content, not ids (see *What a copy changes* above).
+
+```
+What the app has:                    What schrodeck adds:
+
+device XL#1 ──1:N──▶ profiles        "XL setup" (8×4) ──1:N──▶ profiles (content)
+device XL#2 ──1:N──▶ profiles               ├─▶ copy on Mac A's XL
+device Mini ──1:N──▶ profiles               ├─▶ copy on Mac B's XL
+(no type-level grouping)                    └─▶ copy on Mac C's XL
+```
+
 schrodeck syncs at the **profile** level and installs each copy onto a local **device** of the same geometry. Everything per device that isn't a profile (which profile is selected, brightness, device name) stays local (ADR [0019](adr/0019-selected-profile-stays-per-host.md)).
 
 The refined goal ("the same setup on my XL at every computer, with no manual profile shuffling") is being worked out. It would sync the **set** of profiles owned by a device type rather than individually chosen profiles. See the open design questions in the session; this section will be updated when they're decided.
