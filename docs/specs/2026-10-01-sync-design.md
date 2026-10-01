@@ -154,9 +154,9 @@ Every run logs; every **state change** is also recorded as an event.
 
 macOS Notification Center, with the tool's own icon.
 
-- **Mechanism:** a tiny helper app, `SDSyncNotifier.app`: about 60 lines of Swift on `UserNotifications`, with its own bundle id and icon. `install.sh` builds it with `swiftc` and ad-hoc signs it. A notification's icon belongs to the app that posts it, so this is the only supported way to get a custom icon. `osascript display notification` always shows Script Editor's icon, and `terminal-notifier`'s `-appIcon` depends on a private API that recent macOS ignores.
+- **Mechanism:** a tiny helper app, `SDSyncNotifier.app`: about 60 lines of Swift on `UserNotifications`, with its own bundle id and icon. `install.sh` builds it with `swiftc`, ad-hoc signs it, installs it to **`~/Applications/`** and registers it with LaunchServices. Verified on macOS 27: run from a temp dir, the helper is refused with no prompt (`UNErrorDomain 1`; LaunchServices cannot find it). From `~/Applications` it prompts once and then delivers banners with the custom icon. The first run asks the user to allow notifications once per Mac. A notification's icon belongs to the app that posts it, so this is the only supported way to get a custom icon. `osascript display notification` always shows Script Editor's icon, and `terminal-notifier`'s `-appIcon` depends on a private API that recent macOS ignores.
 - **Fallback:** if the helper is missing (no Xcode/CLT on that Mac), fall back to `osascript`. The notification still arrives, with the generic icon.
-- **Icon:** an *original* design that suggests a key grid with a sync arrow. It must **not** be Elgato's logo or app icon. This is a public repo, and borrowing their mark implies an affiliation that doesn't exist.
+- **Icon:** an *original* design: dark tile, 3×2 key grid with one accent key, and a circular sync badge (spike candidate "A", chosen 2026-10-01). It is generated from code at build time, so there is no binary to drift. It must **not** be Elgato's logo or app icon. This is a public repo, and borrowing their mark implies an affiliation that doesn't exist.
 - **What notifies** (configurable in the common config, `notify.level`):
 
 | Event | Default | Example |
@@ -203,4 +203,4 @@ Replicating scripts through a cloud folder means **running code that arrived fro
 1. **Is `Device.UUID` the same on every Mac for the same physical deck?** It looks derived from the serial, which would make it portable, but this has not been checked on a second Mac. If it is host-specific, the deck key becomes `Model + serial` read from IOKit.
 2. **Can you edit a deck's profile while that deck is not attached?** If yes, "only the attached Mac pushes" would block real edits, and pushes should be gated on L ≠ B alone.
 3. ~~License~~: MIT (decided 2026-10-01).
-4. **Do notifications from an ad-hoc-signed helper app work on macOS 27?** The posting app needs the user's one-time permission. Unverified until a spike posts a real notification on a macOS 27 machine.
+4. ~~Ad-hoc-signed notifier on macOS 27~~: works when installed in `~/Applications` (spike, 2026-10-01).
