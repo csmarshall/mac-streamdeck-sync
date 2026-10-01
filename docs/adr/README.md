@@ -28,3 +28,16 @@ Each ADR records one decision, the alternatives rejected, and **how a violation 
 | [0022](0022-onboarding-init-and-join.md) | Onboarding | Accepted | `init` on the first host; `join <dir>` previews every change, then runs the first sync in the foreground; suggested profile name `schrodeck · <name> · <cols>×<rows>` |
 | [0023](0023-store-freshness-via-file-provider.md) | Store freshness | Accepted | Ask the provider via File Provider keys: read only when `current`, a push counts once uploaded, a provider conflict counts as Diverged |
 | [0024](0024-documented-contracts.md) | Documented contracts | Accepted | Five contracts (connector, client per OS, profile format, store format, `--json`), each with one home, an owner and an enforcement mechanism |
+
+## Delivery order
+
+ADR numbers are permanent ids, in the order they were decided. This is the order in which they get **built**. Each milestone is usable and testable on its own, and none of them writes to the Stream Deck app's files before M3.
+
+| Milestone | Delivers | ADRs |
+|---|---|---|
+| **M0 Foundations** | Repo, CI, Go core with no OS imports, port interfaces + fakes + conformance skeleton | [0020](0020-project-hygiene-naming-license.md), [0018](0018-runtime-and-architecture.md), [0024](0024-documented-contracts.md) (context: [0001](0001-build-vs-adopt.md), [0002](0002-transport-shared-cloud-folder.md)) |
+| **M1 Read-only insight** | `status`, `doctor`, `inventory`: enumerate decks and profiles, normalize, hash, check the app version and schema. **Writes nothing** | [0003](0003-decks-are-local-geometry-compatibility.md), [0019](0019-selected-profile-stays-per-host.md), [0006](0006-normalization-and-variables.md), [0015](0015-schema-guard.md), [0010](0010-host-identity-and-config-layering.md), [0017](0017-observability.md) |
+| **M2 Publish** | `init`, `share`, `push`: write the store safely, confirm the upload with the provider | [0004](0004-shared-profiles-and-subscriptions.md), [0009](0009-store-write-protocol.md), [0023](0023-store-freshness-via-file-provider.md), [0005](0005-direction-detection-three-way-hash.md), [0022](0022-onboarding-init-and-join.md) (init) |
+| **M3 Apply** | `join`, `subscribe`, `pull`, `resolve`, `history`, `rollback`: the first writes to the app's files, all behind the two-phase apply | [0008](0008-two-phase-apply.md), [0007](0007-conflict-policy.md), [0011](0011-history-and-rollback.md), [0021](0021-who-may-push.md), [0022](0022-onboarding-init-and-join.md) (join) |
+| **M4 Unattended** | LaunchAgent, watchers, timer, backoff, notifications | [0012](0012-triggers.md), [0016](0016-notifications.md) |
+| **M5 Dependencies** | Icon-pack replication, script inventory and opt-in copy, plugin checks and notifications | [0013](0013-sync-scope-and-scripts.md), [0014](0014-plugin-handling.md) |
