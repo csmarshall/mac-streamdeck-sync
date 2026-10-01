@@ -1,0 +1,21 @@
+stateDiagram-v2
+    direction TB
+    [*] --> Snapshot: trigger (deck attached / timer / CLI)
+    Snapshot --> Compare: for each deck<br/>L = hash(normalized local)<br/>R = hash(shared)<br/>B = last-synced hash (this host)
+    Compare --> InSync: L == R
+    Compare --> Behind: L == B, R != B
+    Compare --> Ahead: L != B, R == B
+    Compare --> FirstRun: no B, L != R
+    Compare --> Diverged: L != B, R != B, L != R
+    FirstRun --> Ahead: shared copy empty
+    FirstRun --> Diverged: shared copy exists
+    Behind --> Pull: quit app, back up local,<br/>swap, relaunch
+    Ahead --> Push: write temp, verify hash,<br/>atomic rename, current.json last
+    Pull --> Verify: re-hash local == R?
+    Push --> Verify: re-read shared == L?
+    Verify --> InSync: ok, B := hash
+    Verify --> Failed: mismatch
+    Failed --> Notify: restore pre-swap backup
+    Diverged --> Notify: keep both snapshots,<br/>touch nothing
+    InSync --> [*]
+    Notify --> [*]: waits for sdsync resolve

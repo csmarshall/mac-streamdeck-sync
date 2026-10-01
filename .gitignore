@@ -1,0 +1,18 @@
+# Per-machine state and notes: never committed
+session-state.md
+CLAUDE.local.md
+config.toml
+*.local.toml
+
+# Real profile data must never land in the repo; test fixtures are redacted by hand
+*.streamDeckProfilesBackup
+*.streamDeckProfile
+*.sdProfile/
+
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
