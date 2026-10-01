@@ -1,0 +1,19 @@
+stateDiagram-v2
+    direction TB
+    [*] --> Detect: watcher / attach / timer / CLI
+    Detect --> Plan: profile P Behind (local copy, any deck,<br/>active or not)
+    Plan --> Abort: any preflight check fails
+    Plan --> Journal: staged tree hash == R, model matches,<br/>schema guard ok, rollback snapshot verified
+    Journal --> Quit: plan.json written (fsync)
+    Quit --> Abort: app won't exit within timeout
+    Quit --> Swap: app exited
+    Swap --> Relaunch: atomic renames done
+    Relaunch --> Verify: app running and settled
+    Verify --> Rollback: mismatch, on_verify_failure = rollback
+    Verify --> Kept: mismatch, on_verify_failure = keep
+    Rollback --> Notify: restore snapshot,<br/>quit / relaunch again
+    Kept --> Notify: leave as applied, flag it
+    Abort --> Notify: nothing touched
+    Verify --> Done: re-hash L == R for every target
+    Done --> [*]: journal cleared, B := R
+    Notify --> [*]: journal cleared, logged

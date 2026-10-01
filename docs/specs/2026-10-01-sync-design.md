@@ -104,21 +104,38 @@ B = local state.json[deck]           (last hash this Mac synced)
 
 This scales to N Macs without clocks or coordination. Each Mac keeps only its own B. A Mac that has been away for many generations is simply Behind. Two Macs that both edited since their last sync are Diverged, and the second one to notice keeps both snapshots.
 
-**Normalization** (what makes L stable): parse JSON, drop runtime-only fields (`State`, plus any found in testing), rewrite `$HOME`-prefixed strings to `~`, sort keys, hash the canonical bytes plus the image bytes. The list of dropped fields is a single named constant, and each entry has a test that shows a launch-only rewrite does not change L.
+**Normalization** (what makes L stable): parse JSON, drop runtime-only fields (action `State`, `Pages.Current` [R15], plus any found in testing), drop `Device.UUID` (rewritten per receiving deck on install), rewrite `$HOME`-prefixed strings to `~`, sort keys, hash the canonical bytes plus the image bytes. The list of dropped fields is a single named constant, and each entry has a test that shows a launch-only rewrite does not change L.
 
-## Applying a pull (always automatic)
+## Applying a pull: plan, commit, verify (always automatic)
 
-1. Stage: build the expanded tree (`~` → this `$HOME`) in a scratch dir and verify its hash.
-2. Snapshot the current local deck tree into the local history ring (`pre-pull`).
-3. Quit: `osascript -e 'quit app "Elgato Stream Deck"'`, then wait for the process to exit (timeout → abort, nothing touched).
-4. Swap: rename the old tree aside and rename the staged tree in. Both live on the same volume, so each rename is atomic.
-5. Relaunch: `open -gj -a "Elgato Stream Deck"`.
-6. Verify: after the app settles, re-hash. L ≠ R → restore that `pre-pull` entry, then quit/relaunch again, and notify.
+Changing the app's files is surgery on a live system, so it is split into phases. **The app restart is the commit point. Everything that can fail is checked before it.** It applies to every behind subscribed copy on this Mac, whether or not that profile is the active one on its deck. The selected profile (`ESDProfilesPreferred`, [R14]) is never touched, so after the restart each deck shows whatever profile it showed before.
+
+![apply state diagram](../apply-states.png)
+
+1. **Plan** (app still running, nothing touched). Abort on any failure:
+   - Stage every target profile in a scratch dir on the same volume: `~` → this `$HOME`, `Device.UUID` → the receiving deck's id, folder id = uuid5(profile, deck).
+   - Staged normalized hash == R for each target.
+   - Each target deck's model matches the profile's model [R8, R10].
+   - Schema guard passes for this app version [R3].
+   - Write the rollback snapshot (local history, `pre-pull`), then re-read it and verify its hash.
+   - Enough free disk for stage + snapshot.
+   - Required plugins: apply the plugin policy (see Inventory).
+2. **Journal:** write `plan.json` (targets, staged paths, snapshot ids, expected hashes) and fsync it. From here on, a crash or power loss is recoverable: the next run sees the journal and either completes the swap or restores the snapshot. It never guesses.
+3. **Quit:** `osascript -e 'quit app "Elgato Stream Deck"'`, then wait for the process to exit. On timeout, abort with nothing touched.
+4. **Swap:** rename the old trees aside and the staged trees in. Same volume, so each rename is atomic.
+5. **Relaunch:** `open -gj -a "Elgato Stream Deck"`, then wait until the process is up and the profile files have stopped changing (settle window).
+6. **Verify:** re-hash every target. L == R → done, B := R, journal cleared.
+7. **On verify failure:** log the expected and actual hashes, then follow `apply.on_verify_failure` in the common config:
+   - `rollback` (default): restore the snapshot and quit/relaunch again.
+   - `keep`: leave the applied files in place and flag them.
+
+   Either way, notify and clear the journal.
 
 ## Triggers
 
 - **Deck attach:** a LaunchAgent with `LaunchEvents` → `com.apple.iokit.matching` on `idVendor = 0x0fd9`. It fires when the switch hands the deck to this Mac, which is exactly when Behind matters.
-- **Timer:** `StartInterval` of about 15 min, to push edits made while attached.
+- **Watcher (near real time):** launchd `WatchPaths` on `ProfilesV3/` (local edits → push) and on the store's per-profile `current.json` (remote changes → plan a pull), debounced so a burst of writes is one run. The app rewrites its own files on every launch, including our relaunch, so the watcher **will** fire after each apply. Those rewrites normalize to the same hash, so the run is a no-op. A test must show that an apply followed by the app's launch rewrite produces **no** second apply (no feedback loop).
+- **Timer:** `StartInterval` of about 15 min as a safety net: Dropbox can deliver files without the watcher seeing them, and a watcher event can be missed.
 - **CLI:** `sdsync status | sync | push | pull | resolve --keep local|remote|<snapshot> | history | rollback | hold | resume | log | inventory | doctor`.
 - A single lock file (`fcntl.flock`) keeps triggers from overlapping.
 
