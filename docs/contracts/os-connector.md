@@ -108,20 +108,22 @@ Invariant: **events are hints, never truth.** The core always re-hashes, so miss
 
 | | macOS | Windows (unverified) |
 |---|---|---|
-| | FSEvents; launchd `WatchPaths` when not resident | `ReadDirectoryChangesW` |
+| | **Recursive** FSEvents in the resident agent (launchd `WatchPaths` isn't recursive, ADR [0012](../adr/0012-triggers.md)) | `ReadDirectoryChangesW` with `bWatchSubtree` |
+
+Invariant: watching is **recursive**. A change three directory levels below a watched root must produce an event.
 
 ### 7. `Scheduler`: running unattended
 
 ```go
 type Scheduler interface {
-    Install(spec AgentSpec) error   // triggers: watch paths, interval, optional device-attach
+    Install(spec AgentSpec) error   // a resident per-user agent; optional device-attach trigger
     Uninstall() error
     Status() (AgentStatus, error)   // for `doctor` and `install --check`
 }
 ```
 | | macOS | Windows (unverified) |
 |---|---|---|
-| | LaunchAgent plist (`WatchPaths`, `StartInterval`, `LaunchEvents` IOKit for attach) | Task Scheduler (logon + interval) or a per-user startup entry; device-attach via WMI/`RegisterDeviceNotification` (optional) |
+| | LaunchAgent plist (`RunAtLoad`, `KeepAlive`) running `schrodeck agent`, which holds the Watcher and the safety timer; IOKit attach notification optional | Task Scheduler (logon + interval) or a per-user startup entry; device-attach via WMI/`RegisterDeviceNotification` (optional) |
 
 ### 8. `Notifier`: user-visible notifications
 
@@ -131,6 +133,7 @@ type Notifier interface {
     Notify(n Notification) error   // title, body, severity, persistent?
 }
 ```
+Deduplication is **not** the connector's job. The core sends at most one notification per key `(condition, profile_id, version)` while that condition persists, with an optional reminder interval (ADR [0016](../adr/0016-notifications.md)). A connector only delivers what it's given.
 | | macOS | Windows (unverified) |
 |---|---|---|
 | | Swift helper app in `~/Applications` (ADR [0016](../adr/0016-notifications.md)); it must be installed there, or the OS refuses with no prompt | Toast notifications (needs an AppUserModelID / Start-menu shortcut) |
@@ -167,7 +170,7 @@ These are not ports. They are properties a connector must **confirm** (by passin
 Every connector must pass the shared **conformance suite**: tests written once against these interfaces and run against each real adapter on its OS's CI runner. At minimum:
 
 - `AppControl`: quit-then-check-not-running; quit timeout returns an error and leaves the app running; launch + settle.
-- `Watcher`: a write produces an event; a burst within the debounce window produces one event.
+- `Watcher`: a write produces an event; a write three directory levels deep produces an event (known-bad: a non-recursive watcher fails); a burst within the debounce window produces one event.
 - `StoreSync`: a local non-synced file returns `Unknown` (known-bad control); a provider file returns a non-Unknown state.
 - `HostIdentity`: stable across two calls and two processes; differs across two users on one host.
 - Filesystem guarantees: rename-aside/rename-in under a concurrent reader; the lock excludes a second process; journal fsync survives a simulated crash (kill between steps).

@@ -14,10 +14,10 @@ You edit a profile on Mac A, flip the switch, and Mac B shows yesterday's layout
 
 - You opt profiles in: `schrodeck share "Work"` on one machine, `schrodeck subscribe "Work"` on the others. The subscription can go onto any local deck with the same geometry (columns × rows, dials), including a virtual deck. Profiles you don't share are never touched.
 - A small CLI (`schrodeck`, written in Go) runs on every machine from launchd. It runs when profile files or the shared folder change, on a safety timer, or by hand. It can optionally also run on deck attach.
-- For each shared profile, it compares **normalized content hashes** of the local copy, the shared copy, and the last state this machine synced. That tells it whether this machine is behind, ahead, in sync, or diverged without trusting file timestamps or clocks. The app rewrites its own files on every launch, so timestamps are only shown, never used to decide.
-- Behind → plan and verify the change first, then quit the app, swap in the update, relaunch, and verify. If verification fails, roll back. Ahead → publish atomically to the shared folder. Diverged → keep both, touch nothing, notify.
+- Every version of a shared profile is an immutable commit in the shared folder, and each machine writes only its own small "head" file, so no file ever has two writers. Comparing **normalized content hashes** against that history tells each machine whether it is behind, ahead, in sync, or diverged, without trusting file timestamps or clocks. Two machines editing at once produce a visible fork, never a silently lost edit.
+- Behind → plan and verify the change first, quit the app, re-check that nothing changed while it quit, swap in the update, relaunch, and verify. If verification fails, roll back once and stop updating that version until you look at it. Ahead → publish to the shared folder. Diverged → keep both versions, touch nothing, notify once.
 - Per-machine differences such as your home folder, or a service URL that differs on a firewalled machine, are handled with variables, so they never count as edits. It also reports which plugins, icon packs, Shortcuts, and scripts a profile needs and whether this machine has them.
-- Repeated changes back off exponentially, so a bug can't turn into a restart loop.
+- Repeated applies back off exponentially, so a bug can't turn into a restart loop; your own edits are never delayed. Deletes never propagate. Alerts are sent once per problem, not once per run.
 - No network connection between the machines is needed. macOS first; the OS-specific parts sit behind interfaces so other platforms can be added later.
 
 ![sync state diagram](docs/sync-states.png)

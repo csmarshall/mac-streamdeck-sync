@@ -1,49 +1,65 @@
-# 0006. Normalization and per-host variables
+# 0006. Normalization (for hashing only) and per-host variables
 
-Status: Accepted 2026-10-01 (variables in v1)
+Status: Accepted 2026-10-01 (variables in v1). Revised 2026-10-01 (review F3, F4, F8, F9): the store holds full trees; normalization is used only for hashing; substitution is path-boundary-aware; `norm_version` added; variable changes never push.
 
 ## Context
 
 The hash in [0005](0005-direction-detection-three-way-hash.md) must change on a real user edit and on nothing else. Some content legitimately differs per host:
+
 - `Open` actions store absolute paths under the user's home, and usernames differ ([R16](../references.md), observed).
 - Some buttons may need per-host values, e.g. a service URL that is reachable differently from a firewalled host.
 - `Device.UUID` names the local deck ([R9](../references.md)).
 
-Some fields change at runtime with no edit: the action `State` and `Pages.Current` ([R15](../references.md), observed).
+Some fields change at runtime with no edit: action `State` and `Pages.Current` ([R15](../references.md), observed).
 
 ## Decision
 
-**Normalize** before hashing: parse the JSON, then:
-1. Drop the runtime-only fields: action `State`, `Pages.Current`.
-2. Drop `Device.UUID`. It is rewritten per receiving deck on install.
-3. Replace variable values with placeholders (below).
-4. Sort the keys, serialize canonically, then hash the canonical bytes together with the image bytes.
+**Three representations, kept distinct:**
 
-The strip list (1–2) is **one named constant**. Every entry has a test proving that a launch-only rewrite does not change the hash.
+| Form | Where | Contents |
+|---|---|---|
+| Local copy | the app's `ProfilesV3` | exactly what the app wrote, with this host's literal values |
+| Stored tree | `trees/<digest>/` in the store ([contract D](../contracts/store-format.md)) | the **full** tree as the app wrote it, with only variable values replaced by placeholders. Runtime fields are kept. |
+| Normalized form | in memory only | the stored form minus the strip list, JCS-canonicalized; used **only** to compute `hash` |
 
-**Variables** (in v1):
-- A built-in `{{HOME}}`, plus user-defined variables (e.g. `{{HA_URL}}`) whose per-host values live in the common config ([0010](0010-host-identity-and-config-layering.md)).
-- On push, each host's value is replaced with its placeholder. On install, placeholders are expanded with the receiving host's values.
-- A per-host difference therefore never registers as an edit or a conflict.
+- **Install** = take the stored tree, expand placeholders with this host's values, set `Device.UUID` to the receiving deck, and name the folder per [0026](0026-profile-identity.md). That is close to a byte-copy, so we depend as little as possible on the app tolerating fields we invented.
+- **The exact hash definition and the file allow-list live in [contract C § normalized hash](../contracts/profile-format.md#normalized-hash).** The strip list is one named constant there.
+- **`norm_version`:** every commit records the normalization version it was hashed under. Hashes are compared only under the same `norm_version`. Changing normalization means a `FORMAT` migration ([0027](0027-store-lifecycle.md)): B is re-based without pushing, and hosts on an older version go read-only instead of looping.
+
+**Variables (v1):**
+
+- The built-in `{{HOME}}`, plus user-defined variables (e.g. `{{HA_URL}}`). Their names and defaults are declared in the common config; each host's values live in its own `hosts/<host_id>.toml` ([0010](0010-host-identity-and-config-layering.md)).
+- **Path-boundary-aware substitution.** A value is replaced only where it is followed by end-of-string or a boundary character (`/`, `\`, `?`, `#`, `"`, whitespace). `/Users/<al>` therefore never matches inside `/Users/<alice>`. Longer values are matched first.
+- **Escaping.** A literal `{{` in profile content is stored as the reserved placeholder `{{_}}` and expanded back on install, so user text can never be mistaken for a placeholder.
+- **Collision guard.** Before pushing, scan the local copy for a literal that equals **another** registered host's value of any variable (path-boundary-aware). An example is the other Mac's `/Users/<other>/…` home path. If one is found, **refuse the push** for that profile and notify, naming the button. That literal would be wrong on that host, and pushing it would bake one machine's value into everyone's copy. `schrodeck inventory` lists the offending buttons.
+- **A variable-value change never pushes.** Each copy's local state records the variable values it was last materialized with. If this host's values change, the next run **re-materializes** the copy by re-installing B's stored tree with the new values through the normal apply ([0008](0008-two-phase-apply.md)). It doesn't push, and B doesn't change. Otherwise old literals would look like an edit and be pushed as literals (review scenario 3).
 
 ## Consequences
 
 - Good: per-host differences are first-class, not a source of false conflicts.
-- Good: `{{HOME}}` is a special case of a general mechanism, so there is only one code path.
-- Bad: replacing a value with its placeholder is a string replacement. If a host's variable value also appears as unrelated text, it gets replaced too. Variable values should be specific (full URLs, full paths), and the tool should warn on short values.
-- Risk: a new runtime field added by an app update breaks the hash stability. The schema guard ([0015](0015-schema-guard.md)) and the launch-rewrite test catch it.
+- Good: `{{HOME}}` is a special case of one general mechanism.
+- Good: the store holds what the app actually wrote, so install doesn't depend on reinserting stripped fields.
+- Bad: substitution is still a text operation. A variable value that appears in unrelated text, at a boundary, is replaced too. Values should be specific (full URLs, full paths), and the tool warns on short values (under 8 characters).
+- Risk: a new runtime field added by an app update breaks hash stability. The schema guard ([0015](0015-schema-guard.md)) and the launch-rewrite probe ([contract C](../contracts/profile-format.md), P4) catch it.
 
 ## Alternatives considered
 
+- **Store the stripped, normalized tree** (the first design): install would have to reinvent `State`, `Pages.Current` and other fields, betting the app accepts them. Rejected after review (F9).
 - **Raw byte hash:** fails on every launch.
+- **Plain substring substitution:** `/Users/<al>` corrupts `/Users/<alice>`; rejected (F3).
 - **Per-host path maps (old → new):** a special case of variables, with more configuration.
-- **Ignore whole manifests the app rewrites:** loses real edits.
 
 ## Verified by
 
 No check yet; to be written in the plan:
-- One test per strip-list entry: fixture pair (before/after launch rewrite) ⇒ equal hashes. The same pair with normalization disabled ⇒ unequal hashes (known-bad).
-- A variable round-trip test: canonicalize(expand(x, hostA), hostA) == canonicalize(expand(x, hostB), hostB).
+- One test per strip-list entry: a fixture pair (before/after a launch rewrite) ⇒ equal hashes; the same pair with normalization disabled ⇒ unequal hashes (known-bad).
+- **Adversarial cross-host fixtures** (review F20), where both sides of each comparison are not derived from the same placeholder tree:
+  - prefix homes (`/Users/<al>` vs `/Users/<alice>`);
+  - a literal `{{` in a button title;
+  - another host's home path baked into a button, which must refuse the push;
+  - a variable value change, which must re-materialize, not push;
+  - a value appearing mid-word, which must not be substituted.
+- A cross-host round trip using **two distinct host configs**: expand on host A, edit nothing, canonicalize on host B ⇒ the same hash as the stored tree.
 
 ## References
 

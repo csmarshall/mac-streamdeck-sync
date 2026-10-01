@@ -34,7 +34,7 @@ A host has several profiles per deck, and some are app-linked "Smart Profiles" (
 ## Verified by
 
 No check yet; to be written in the plan:
-- A test that an unshared profile's files are byte-identical before and after a sync run.
+- A test that **no unshared profile file is ever opened for writing**, asserted at the filesystem-port level (review F19). A before/after byte comparison would be fooled by the running app's own rewrites ([R15](../references.md)), and can't fail against fakes.
 - A test that an inactive subscribed copy is updated.
 
 ## References

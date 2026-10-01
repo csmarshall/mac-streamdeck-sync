@@ -1,6 +1,6 @@
 # 0015. Schema guard: stop when the app's files change shape
 
-Status: Accepted 2026-10-01
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F5): the guard blocks pushes as well as applies; incoming commits are checked against this host's known-good fingerprints; the file-pattern set is part of the fingerprint; the app bundle is watched by the resident agent.
 
 ## Context
 
@@ -11,11 +11,12 @@ Elgato calls file-level profile management "not officially supported and may bre
 schrodeck records a known-good fingerprint made of three signals:
 1. The app version, from the app bundle's `Info.plist`.
 2. The profile manifest `Version`.
-3. A structural fingerprint: the set of keys at each level of top-level and page manifests.
+3. A structural fingerprint: the set of keys at each level of top-level and page manifests, plus the set of file-name patterns present ([contract C](../contracts/profile-format.md) P7).
 
 - Plugin manifests are validated against Elgato's published schema.
-- A launchd watch on the app bundle notices updates.
-- If any signal differs from the known-good set, **all applies pause** (sync status is still reported) until `schrodeck doctor` passes and the user confirms. `doctor` re-runs the launch-rewrite stability checks ([0006](0006-normalization-and-variables.md)) against the new app.
+- The resident agent ([0012](0012-triggers.md)) watches the app bundle and notices updates.
+- If any **local** signal differs from the known-good set, **both pushes and applies pause** (status is still reported) until `schrodeck doctor` passes and the user confirms. Pushes pause too: after an app update that migrated the profile format, L changes on every profile, and pushing would spread the new format to hosts still on the old app (review F5). `doctor` re-runs the launch-rewrite stability checks ([0006](0006-normalization-and-variables.md)) against the new app.
+- Every commit records the `fingerprint` and `app_version` its source files matched ([contract D](../contracts/store-format.md)). The apply plan ([0008](0008-two-phase-apply.md)) refuses an incoming commit whose fingerprint is not in **this host's** known-good set (e.g. it was saved by a newer app). It notifies once ("*<profile>* was saved by Stream Deck <version>, which this Mac hasn't verified") and waits until this host's app is updated and `doctor` passes.
 
 ## Consequences
 
@@ -33,6 +34,8 @@ schrodeck records a known-good fingerprint made of three signals:
 No check yet; to be written in the plan:
 - A fixture with an added unknown key ⇒ guard trips.
 - A changed `Version` ⇒ guard trips.
+- A tripped guard ⇒ zero pushes and zero applies (filesystem-port assertion), with status still reported.
+- An incoming commit with an unknown fingerprint ⇒ the plan refuses it; known-good: a matching fingerprint passes.
 - The unchanged fixture ⇒ guard passes (known-good).
 
 ## References

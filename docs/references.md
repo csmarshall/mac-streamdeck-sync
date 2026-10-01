@@ -1,6 +1,6 @@
 # References: what Elgato documents vs. what we observed
 
-ADRs cite this file by row id (e.g. `[R3]`). **Documented** = Elgato states it. **Observed** = we verified it on a real machine but Elgato does not promise it, so it may change in any app update and the schema guard (ADR 13) must catch that. Checked 2026-10-01, Stream Deck 7.5.1, macOS 27.
+ADRs cite this file by row id (e.g. `[R3]`). **Documented** = Elgato states it. **Observed** = we verified it on a real machine but Elgato does not promise it, so it may change in any app update and the schema guard ([ADR 0015](adr/0015-schema-guard.md)) must catch that. Checked 2026-10-01, Stream Deck 7.5.1, macOS 27.
 
 | id | Topic | Status | Source | What it says / what we saw |
 |---|---|---|---|---|
@@ -14,7 +14,7 @@ ADRs cite this file by row id (e.g. `[R3]`). **Documented** = Elgato states it. 
 | R8 | Device types and key-grid sizes | Documented | [SDK: Devices](https://docs.elgato.com/streamdeck/sdk/guides/devices) | DeviceType enum (Stream Deck, Mini, XL, +, Neo, + XL, Virtual, …) with columns × rows. Model compatibility is derived from this. |
 | R9 | Device ID stability | **Observed** | [SDK: plugin events](https://docs.elgato.com/streamdeck/sdk/references/websocket/plugin/) | The SDK calls `device` only a "Unique identifier". On disk, `Device.UUID` = `@(1)[vendor/product/usb-serial]`, and it contains the IOKit USB serial (verified for one deck on one Mac; see issue #1). |
 | R10 | Profiles are device-specific | Documented | [Deploying profiles at scale](https://www.elgato.com/us/en/explorer/products/stream-deck/stream-deck-profiles-at-scale/); [6.5 release notes](https://help.elgato.com/hc/en-us/articles/22500155667469) | "layouts and button mappings differ across models". Since 6.5 you can choose the target device when importing. |
-| R11 | Disconnected devices stay editable | Documented | [SDK: Devices](https://docs.elgato.com/streamdeck/sdk/guides/devices) | "keys/encoders can still be visible in the Stream Deck app while the hardware is disconnected". This bears on proposed ADR P1 / issue #2. |
+| R11 | Disconnected devices stay editable | Documented | [SDK: Devices](https://docs.elgato.com/streamdeck/sdk/guides/devices) | "keys/encoders can still be visible in the Stream Deck app while the hardware is disconnected". This is why any host whose copy changed may push ([ADR 0021](adr/0021-who-may-push.md); issue #2 confirms it). |
 | R12 | Virtual Stream Deck | Documented | [Virtual Stream Deck](https://help.elgato.com/hc/en-us/articles/35492041288337) | Up to 8×8; each has "unique settings"; needs a physical deck seen within 30 days. On disk its ID is `@(0)[]` (no serial). |
 | R13 | Smart (app-linked) profiles | Documented | [Smart Profiles](https://help.elgato.com/hc/en-us/articles/360053419071) | Switch on the focused app; "deactivated" while the Stream Deck window is open. |
 | R14 | Selected profile per device | **Observed** | n/a | `~/Library/Preferences/com.elgato.StreamDeck.plist` → `Devices` → `<device id>` → `ESDProfilesInfo.ESDProfilesPreferred` (lowercase UUID). |

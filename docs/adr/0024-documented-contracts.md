@@ -20,7 +20,7 @@ Five contracts, indexed in [docs/contracts/README.md](../contracts/README.md), e
 | **A** | Go core ↔ OS connector: the ports (**the single source of truth for the port list**), invariants, filesystem guarantees ([os-connector.md](../contracts/os-connector.md)) | us | conformance suite run against each real adapter on its OS's CI |
 | **B** | OS connector ↔ the Stream Deck app on that OS: paths, prefs, process behavior ([client-os.md](../contracts/client-os.md)) | Elgato (observed) | `schrodeck doctor` probes + schema guard (ADR [0015](0015-schema-guard.md)) |
 | **C** | Go core ↔ the app's profile format; cross-OS, versioned by manifest `Version` ([profile-format.md](../contracts/profile-format.md)) | Elgato (observed) | `doctor` launch-rewrite and round-trip probes + schema guard |
-| **D** | schrodeck ↔ schrodeck across hosts and schrodeck versions: the store format | us | `FORMAT` version; readers refuse unknown formats; compatibility tests |
+| **D** | schrodeck ↔ schrodeck across hosts and schrodeck versions: the store format ([store-format.md](../contracts/store-format.md)) | us | `FORMAT` version; readers refuse unknown formats; compatibility tests |
 | **E** | Go core ↔ any UI or script: the `--json` CLI | us | `schema_version` in every document; golden-file tests |
 
 - Other documents **link** to the contracts. They never restate port lists, counts, or assertions.
@@ -34,7 +34,7 @@ Five contracts, indexed in [docs/contracts/README.md](../contracts/README.md), e
 - Good: an Elgato update breaks B or C visibly (the guard refuses and `doctor` names the failing probe) instead of silently corrupting profiles.
 - Good: mixed schrodeck versions sharing one store are an explicit, tested case (D), not an accident.
 - Bad: more documents to keep true. Mitigations: same-PR rule for ours; evidence-only rule for Elgato's.
-- D and E currently live in ADR [0009](0009-store-write-protocol.md) / the spec and in ADR 0018. They move into `docs/contracts/` when the code defines them. Until then the index points at their current homes.
+- D was extracted into `docs/contracts/store-format.md` after the review (F22), as the single definition of store fields. E still lives in ADR 0018 and moves into `docs/contracts/` when the code defines it.
 - Risk: A's port boundaries may still be wrong for Windows in ways only a real Windows connector will reveal.
 
 ## Alternatives considered

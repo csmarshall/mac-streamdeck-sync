@@ -12,7 +12,7 @@ An unattended tool that restarts another app must be easy to audit: what changed
   - Each line has a timestamp, level, profile short-id, the state transition and its trigger.
   - Levels: DEBUG for steps and InSync no-ops, INFO for transitions and decisions, WARN, ERROR (failure plus the state it left).
   - `SCHRODECK_LOG_LEVEL` overrides the level. Rotated by size.
-- **Event trail:** `<store>/events/<host_id>.jsonl`. It is append-only and one file per host, with lines `{ts, host_id, profile, from, to, action, hashes, trigger, result}`.
+- **Event trail:** `<store>/events/<host_id>.jsonl`. It is append-only and one file per host, rotated by its owner. The line fields are defined once, in [contract D](../contracts/store-format.md#records).
 - `schrodeck log` merges all hosts' files into one timeline.
 - **Timestamps are for display only.** No decision reads them ([0005](0005-direction-detection-three-way-hash.md)), so clock skew can reorder the timeline but never change behavior.
 - **Never logged:** tokens, serials, raw `Device.UUID` or `IOPlatformUUID`. Hosts and decks appear as short hashes plus friendly names.

@@ -22,7 +22,9 @@ schrodeck **never reads `ESDProfilesPreferred` for sync and never writes it.** I
 
 ## Verified by
 
-No check yet; to be written in the plan: an apply test asserting the app preference file is byte-identical before and after.
+No check yet; to be written in the plan (review F19):
+- schrodeck **never opens the app's preference file for writing**, asserted at the filesystem-port level (the `AppPrefs` port is read-only by type).
+- On a real machine (`doctor`, M3): `ESDProfilesPreferred` for every deck is **semantically** equal (same profile UUID, case-insensitive) before and after an apply. A byte comparison of the plist would be fooled by the app rewriting its own preferences on relaunch.
 
 ## References
 

@@ -1,21 +1,24 @@
 stateDiagram-v2
     direction TB
-    [*] --> Snapshot: trigger (watcher / timer / CLI / attach)
-    Snapshot --> Compare: for each shared profile<br/>L = hash(normalized local)<br/>R = hash(shared)<br/>B = last-synced hash (this host)
+    [*] --> Read: trigger (watcher / timer / CLI / attach)
+    Read --> Gate: for each subscribed copy<br/>read heads, commits, trees<br/>L = hash(local), B = last synced
+    Gate --> Stopped: tombstone, store lost, local deleted,<br/>deck gone, version mismatch, held
+    Gate --> InFlight: commit or tree missing,<br/>or provider not current
+    Gate --> Forked: heads not ancestry-ordered
+    Gate --> Compare: R = the tip all heads descend from
     Compare --> InSync: L == R
     Compare --> Behind: L == B, R != B
     Compare --> Ahead: L != B, R == B
-    Compare --> FirstRun: no B, L != R
-    Compare --> Diverged: L != B, R != B, L != R
-    FirstRun --> Ahead: shared copy empty
-    FirstRun --> Diverged: shared copy exists
-    Behind --> Pull: quit app, back up local,<br/>swap, relaunch
-    Ahead --> Push: write temp, verify hash,<br/>atomic rename, current.json last
-    Pull --> Verify: re-hash local == R?
-    Push --> Verify: re-read shared == L?
-    Verify --> InSync: ok, B := hash
-    Verify --> Failed: mismatch
-    Failed --> Notify: restore pre-swap backup
-    Diverged --> Notify: keep both snapshots,<br/>touch nothing
+    Compare --> Diverged: L != B, R != B
+    Diverged --> Forked: push local edit as its own commit
+    Behind --> Apply: two-phase apply (ADR 0008)
+    Ahead --> Push: tree, commit (parent B),<br/>head written last
+    Apply --> Blocked: verify failed, rolled back
+    Apply --> InSync: verified, B and head := R
+    Push --> InSync: B and head := new commit
+    Forked --> Notify: deduplicated alert,<br/>no app files touched
+    Blocked --> Notify
+    Stopped --> Notify
+    InFlight --> [*]: retry next tick, alarm if stuck
     InSync --> [*]
-    Notify --> [*]: waits for schrodeck resolve
+    Notify --> [*]: waits for resolve / unblock / user

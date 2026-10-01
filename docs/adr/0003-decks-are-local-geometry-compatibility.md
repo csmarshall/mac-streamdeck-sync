@@ -16,6 +16,7 @@ Elgato documents a DeviceType table with key-grid sizes (columns × rows, plus d
 - Two decks are **compatible** when their geometry matches: columns × rows, plus dial/encoder count, from Elgato's DeviceType table. Model names are not compared directly. This makes virtual decks **in scope** when their geometry matches.
 - Optionally, when a hardware serial is visible in the device id, record "deck seen on host" sightings in the store. That is **informational only** (for `status`/`log`); no decision depends on it.
 - A USB attach event may be used as a trigger accelerator ([0012](0012-triggers.md)), never as a source of truth.
+- When the deck a copy is bound to disappears from the app's device list (e.g. a virtual deck expiring), that copy stops syncing and notifies ([0026](0026-profile-identity.md)).
 
 ## Consequences
 

@@ -1,6 +1,6 @@
-# 0016. Notifications come from our own helper app with an original icon
+# 0016. Notifications come from our own helper app, deduplicated, with an original icon
 
-Status: Accepted 2026-10-01
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F6, F24; maintainer's dedup requirement): notifications are keyed by condition and sent once on entering it; event table updated.
 
 ## Context
 
@@ -10,38 +10,58 @@ Spike on macOS 27, 2026-10-01, with an ad-hoc-signed Swift `UserNotifications` h
 - From a temp directory it was refused with no prompt (`UNErrorDomain` code 1; LaunchServices could not resolve the app, -10814).
 - From `~/Applications` it prompted once, then delivered banners with its custom icon.
 
+The agent re-evaluates every profile on every run (watcher events and a 15-minute timer, [0012](0012-triggers.md)). A persistent condition such as BLOCKED or Forked would therefore produce one alert per run unless notifications are deduplicated. The maintainer wants exactly one alert per condition.
+
 ## Decision
 
 - **Mechanism:** a small Swift helper app, built and ad-hoc signed at install time, installed into `~/Applications` and registered with LaunchServices.
 - **Fallback:** `osascript` (generic icon) when the helper is unavailable.
 - **Icon:** an **original** design (a dark tile with a key grid, one accent key, and a circular sync badge). It is generated from code and uses no Elgato marks ([R19](../references.md)).
+- **Deduplication** is part of the notifier design, in the core's notifier layer, so every OS connector gets it ([contract A](../contracts/os-connector.md) `Notifier`):
+  - Each alert has a **key** `(condition, profile_id, version)`, where `version` is the commit or fork tip set involved.
+  - An alert is sent **once, when the condition is entered**. It is not resent while the condition persists.
+  - It is sent again only when the key changes (e.g. a new incoming version is also BLOCKED) or after the condition clears and re-enters.
+  - An optional reminder interval (`notify.remind_after`, default **off**) re-sends a still-active persistent alert.
+  - Sent-alert state lives in local state, so it survives agent restarts.
+- **Events:**
 
-| Event | Default |
-|---|---|
-| Apply starting (deck about to blank) | on |
-| Apply / push / rollback done | on |
-| Diverged | on, persistent |
-| Failed (+ rolled back) | on, persistent |
-| Missing plugin / script / Shortcut | on |
-| Held profile skipped | once per hold |
-| New shared profile available | on |
-| InSync | never |
+| Event | Default | Key / dedup |
+|---|---|---|
+| Apply starting (the deck is about to blank) | on | per apply |
+| Apply / push / rollback done | on | per commit |
+| New shared profile available | on | per profile |
+| Diverged / Forked | on, persistent | (fork, profile, tip set) |
+| BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification" + how to inspect | on, persistent | (blocked, profile, commit) |
+| Push refused: another host's value found in the profile (collision guard, [0006](0006-normalization-and-variables.md)) | on, persistent | (collision, profile, local hash) |
+| Applied but unverified (`keep`) | on | (kept, profile, commit) |
+| Backoff engaged | on (`notify.on_backoff`) | (backoff, profile) |
+| Missing plugin / script / Shortcut | on | (missing, profile, dependency) |
+| Unshared, store lost, local copy deleted, deck gone | on, persistent | (condition, profile) |
+| Stuck in flight beyond the alarm threshold | on | (inflight, profile, head set) |
+| Version mismatch, upgrade needed | on, persistent | (version, store FORMAT) |
+| Held profile skipped | once per hold | (hold, profile) |
+| Nothing to sync on this Mac; run `schrodeck uninstall` | once | (idle, host) |
+| InSync | never | — |
 
 ## Consequences
 
-- Good: clearly identifiable notifications, and native Notification Center behavior.
+- Good: clearly identifiable notifications; one alert per problem, not one per run.
 - Bad: the user must allow notifications once per host. Building needs a Swift toolchain.
 - Risk: the spike was one run on one machine. Behavior on other macOS versions is projected, not verified.
+- Risk: dedup state lost with local state ⇒ each active condition alerts once more. That's acceptable.
 
 ## Alternatives considered
 
 - **osascript only:** wrong icon. Notifications look like they come from Script Editor.
 - **terminal-notifier:** its custom-icon option relies on behavior recent macOS no longer honors (3.1.0 is the current Homebrew version).
 - **Reusing Elgato's icon:** implies affiliation; trademarked ([R19](../references.md)).
+- **Dedup in the macOS adapter only:** every other OS connector would have to reimplement it. Rejected.
 
 ## Verified by
 
-The spike (throwaway) showed delivery with the custom icon from `~/Applications` and refusal from a temp dir. A permanent check is still to be written: an install test asserting the helper's path is under an Applications directory, and a manual first-run checklist item.
+- The spike (throwaway) showed delivery with the custom icon from `~/Applications` and refusal from a temp dir.
+- Still to be written: an install test that the helper's path is under an Applications directory; a manual first-run checklist item.
+- Dedup test: a BLOCKED condition persisting across 10 simulated runs ⇒ exactly one notification. A new commit that is also BLOCKED ⇒ one more. Known-bad: with dedup disabled, the same test sees 10.
 
 ## References
 

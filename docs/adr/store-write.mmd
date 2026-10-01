@@ -1,13 +1,16 @@
 stateDiagram-v2
     direction TB
-    [*] --> Stage: local copy is Ahead
-    Stage --> VerifyTmp: write current.tmp-HOST/
-    VerifyTmp --> Abort: re-read hash != L
-    VerifyTmp --> Rename: re-read hash == L
-    Abort --> [*]: remove tmp, log ERROR
-    Rename --> Publish: rename to current/
-    Publish --> ReadTree: current.json written last,<br/>sync client delivers to other hosts
-    ReadTree --> InFlight: tree hash != current.json hash
-    ReadTree --> Usable: tree hash == current.json hash
-    InFlight --> ReadTree: retry next tick, apply nothing
+    [*] --> StageTree: local copy Ahead (or Diverged)
+    StageTree --> Abort: re-read digest or hash mismatch
+    StageTree --> PublishTree: tmp/HOST/ staged and verified
+    PublishTree --> PublishCommit: rename to trees/DIGEST/<br/>(skip if it already exists)
+    PublishCommit --> Confirm: commits/ID.json, parents = [B]<br/>(write-once)
+    Confirm --> MoveHead: provider reports tree and commit uploaded
+    MoveHead --> Reader: heads/HOST.json rewritten LAST<br/>(only this host writes it)
+    Abort --> [*]: remove tmp, log ERROR, notify
+    Reader --> InFlight: a commit or tree is missing,<br/>or its digest fails
+    Reader --> Forked: heads not ancestry-ordered
+    Reader --> Usable: one tip all heads descend from = R
+    InFlight --> Reader: retry next tick, apply nothing
+    Forked --> [*]: ADR 0007, wait for resolve
     Usable --> [*]: continue with ADR 0005
