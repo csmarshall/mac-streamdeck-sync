@@ -45,7 +45,7 @@ The Stream Deck app keeps profiles per machine and has no automatic cross-machin
 | **Setup** | The unit of sync: one shared profile (all its pages and folders) with a permanent `profile_id`, a geometry, and a user-provided name (ADR [0029](../adr/0029-problem-statement-and-setup-model.md), [0026](../adr/0026-profile-identity.md)). "Shared profile" is Elgato's term for what a setup contains. |
 | **Template** | The profile a setup was seeded from, picked by the user at `init`/`share`. It is copied once and **never modified or synced**. |
 | **Member copy** | A profile schrodeck created for a setup on one host's chosen device, named `schrodeck - <cols>x<rows> - <name>`. Created at `init`/`share` (from the template) and at `join`/`subscribe` (always a **new** profile). **Every member copy is kept up to date**, whether or not it is the deck's active profile, and all member copies are peers. Profiles that aren't member copies are never touched. |
-| **DETACHED(reason)** | A member copy whose host dropped out of the setup after an unexpected change. The profile is left as-is, nothing syncs for it there, and it stays that way until `schrodeck resolve` (ADR [0030](../adr/0030-fail-closed-detach.md)). |
+| **DETACHED(reason)** | A member copy whose host dropped out of the setup after an unexpected change. The profile is never destroyed (left as-is while detached; archived as `<name>-<datestamp>` if the user rejoins onto the same deck), nothing syncs for it there, and it stays that way until `schrodeck resolve` (ADR [0030](../adr/0030-fail-closed-detach.md), [0026](../adr/0026-profile-identity.md)). |
 | **Store** | The shared cloud folder. Its format is [contract D](../contracts/store-format.md). |
 | **Revision / head** | Each version of a shared profile is an immutable **revision** in the store: a record of its content hash, its stored tree and its parent revision(s). This is schrodeck's own record in the shared folder, modeled on git's idea but **not** a git commit; in these docs "commit" only ever means git. Each host owns a **head** naming the revision its copy is at. **R** is the newest revision all live heads descend from (equal-content *tips* count as one; history is matched by ancestry only, so an undo to earlier content is a new revision that wins). |
 
@@ -73,9 +73,9 @@ Onboarding (ADR [0022](../adr/0022-onboarding-init-and-join.md), [0029](../adr/0
 
 ```
 host A:  schrodeck init                     # preflight the app; pick the shared dir; pick a device + TEMPLATE profile and a name;
-                                            # creates a NEW profile "schrodeck - 8x4 - Work" (template untouched); first push
+                                            # publishes the setup (template read-only), then installs it here as a NEW profile "schrodeck - 8x4 - Work"
 host B:  schrodeck join <dir>               # preflight; lists setups whose geometry matches a device here; pick setup + destination;
-                                            # DRY-RUN rundown; confirm; a NEW profile is created; first sync in the foreground;
+                                            # DRY-RUN rundown (incl. any archive of an old copy); confirm; a NEW profile is created; first sync in the foreground;
                                             # then the agent is installed. Nothing on host B is replaced or brought into the setup
 ```
 
@@ -87,7 +87,7 @@ host B:  (notification: "Setup 'schrodeck - 8x4 - Work' is available")
 host B:  schrodeck subscribe <setup> --deck <deck>  # always a NEW profile on a matching device
          # edit any member copy on any host; every other member copy follows automatically
 host B:  (deletes its member copy in the app) -> DETACHED(local-deleted), one notification
-host B:  schrodeck resolve <setup>                  # rejoin as a new profile, replace only the detached copy, publish, or unmap
+host B:  schrodeck resolve <setup>                  # rejoin (an old copy on that deck is archived as <name>-<datestamp>), publish, or unmap
 host B:  schrodeck unsubscribe <setup>              # leave the setup; the local profile stays, detached
 host A:  schrodeck unshare <setup>                  # tombstone; every member keeps a detached copy
 host B:  schrodeck reshare <profile_id>             # undo an accidental unshare; members detached by unshare resume
@@ -118,7 +118,7 @@ The full decision table is in ADR 0005. In short:
 - Both moved otherwise → **Diverged** → push the local edit as its own revision, which makes a visible fork; notify; wait for `resolve`.
 - Live heads don't converge → **Forked** → no host applies anything until `resolve`.
 - Tombstone → the copy is detached by unshare and resumes on `reshare`; version mismatch → read-only until upgrade/`migrate`; schema guard → pause until `doctor`. These are **expected** pauses (ADRs [0025](../adr/0025-deletion-and-unshare.md), [0027](../adr/0027-store-lifecycle.md), [0015](../adr/0015-schema-guard.md)).
-- **Anything unexpected** (the member copy deleted in the app, the store copy lost, the store went backwards, the deck gone, the copy re-bound to another device, a foreign device id, a variable collision, a duplicate copy, a stale-version edit, an unreadable apply journal, or any unclassified condition) → **DETACHED(reason)**: that Mac drops out of that setup, the profile is left exactly as it is, nothing syncs for it there, one notification is sent, and it persists until `schrodeck resolve <setup>` (rejoin as a new profile, replace only the detached copy after confirmation, publish this copy where the cause allows, or unmap). The full expected/unexpected classification is in ADR [0030](../adr/0030-fail-closed-detach.md).
+- **Anything unexpected** (the member copy deleted in the app, the store copy lost, the store went backwards, the deck gone, the copy re-bound to another device, a foreign device id, a variable collision, an occupied canonical folder, a stale-version edit, an unreadable apply journal, or any unclassified condition) → **DETACHED(reason)**: that Mac drops out of that setup, the profile is left exactly as it is, nothing syncs for it there, one notification is sent, and it persists until `schrodeck resolve <setup>` (rejoin, which archives an old copy on the same deck as `<name>-<datestamp>` and tells you; publish this copy where the cause allows; or unmap). The full expected/unexpected classification is in ADR [0030](../adr/0030-fail-closed-detach.md).
 - A host that lost its local state rebuilds B from its own head.
 
 ![sync state diagram](../sync-states.png)
@@ -132,7 +132,7 @@ The full decision table is in ADR 0005. In short:
 ADR [0006](../adr/0006-normalization-and-variables.md), [contract C](../contracts/profile-format.md).
 
 - **The store holds full trees**, exactly as the app wrote them, with variable values replaced by placeholders and `Device.UUID` replaced by `{{DEVICE}}`. Install is close to a byte-copy: expand the placeholders (including `{{DEVICE}}` to the receiving deck), and name the folder.
-- **Normalization is used only to compute the hash.** It strips the runtime fields and `Device.UUID`, canonicalizes JSON with RFC 8785, and hashes an allow-listed file set. The exact definition, including `norm_version`, is [contract C § normalized hash](../contracts/profile-format.md#normalized-hash). Stray `.DS_Store` or conflict-copy files are outside the allow-list.
+- **Normalization is used only to compute the hash.** It strips the runtime fields, `Device.UUID` and every `ActionID`, relabels page folders by their position in `Pages.Pages`, replaces image references with the images' content hashes (so only referenced images count), canonicalizes JSON with RFC 8785, and hashes the manifests. Installs keep page UUIDs and image names but **regenerate every `ActionID`** deterministically ([0026](../adr/0026-profile-identity.md)), so schrodeck never creates duplicate `ActionID`s on one Mac. The exact definition, including `norm_version`, is [contract C § normalized hash](../contracts/profile-format.md#normalized-hash). Stray `.DS_Store` or conflict-copy files are outside the allow-list.
 
 **Variables (v1):**
 
@@ -224,7 +224,7 @@ ADR [0025](../adr/0025-deletion-and-unshare.md), [0026](../adr/0026-profile-iden
 - A member copy deleted in the app is **never** propagated: that Mac drops out of the setup, DETACHED(local-deleted); `resolve` suggests unmap, or rejoin as a new profile.
 - A store copy that vanished without a tombstone (declared only when the provider reports the store as fresh, and persisting) → DETACHED(store-lost). It is never resurrected or wiped, and it does **not** clear by itself.
 - When a host has nothing left to sync, the agent suggests `schrodeck uninstall` once, and never uninstalls itself.
-- `profile_id` is permanent. **Every** member copy, on every host (including the one created from the template at `init`/`share`), lives in a new folder named `uuid5(profile_id, deck_key)`, where `deck_key` is the deck's key in the app's prefs device list, so the mapping can be rebuilt. The template is never a member. A deck whose key isn't unique on the host (e.g. two virtual decks) can't be a destination. The user always picks the destination device. If a member copy's deck disappears from the app, that copy is DETACHED(deck-gone) until resolved.
+- `profile_id` is permanent. **Every** member copy, on every host (including the one created from the template at `init`/`share`), lives in the canonical folder `uuid5(profile_id, deck_key)`, where `deck_key` is the deck's key in the app's prefs device list, so the mapping can be rebuilt. The template is never a member. A deck whose key isn't unique on the host (e.g. two virtual decks) can't be a destination. The user always picks the destination device. If a member copy's deck disappears from the app, that copy is DETACHED(deck-gone) until resolved. **Rejoining onto a deck that already holds a copy of the setup archives that copy:** it is moved to its own folder and renamed `<name>-<YYYY-MM-DD-HHMM>`, named in the dry-run rundown and in a notification, and never touched again. The rejoined member takes the canonical folder and name (ADR [0026](../adr/0026-profile-identity.md), review F50).
 
 ## Triggers and loop protection
 

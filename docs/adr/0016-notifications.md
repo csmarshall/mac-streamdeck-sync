@@ -1,6 +1,6 @@
 # 0016. Notifications come from our own helper app, deduplicated, with an original icon
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F6, F24; maintainer's dedup requirement): notifications are keyed by condition and sent once on entering it; event table updated. Revised 2026-10-01 (review round 3: F42, F46): rows for pending older-version edits and unresolved cross-profile references.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F6, F24; maintainer's dedup requirement): notifications are keyed by condition and sent once on entering it; event table updated. Revised 2026-10-01 (review round 3: F42, F46): rows for pending older-version edits and unresolved cross-profile references. Revised 2026-10-01 (review F50): an archive made by a rejoin is always announced.
 
 ## Context
 
@@ -34,7 +34,8 @@ The agent re-evaluates every profile on every run (watcher events and a 15-minut
 | BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification", noting that an edit made during the restart is saved in history, + how to inspect ([0008](0008-two-phase-apply.md)) | on, persistent | (blocked, profile, revision) |
 | HoldLocal: "this Mac can't take version X of *<profile>*, so your edit is local only" ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (holdlocal, profile, R revision) |
 | Incoming revision in a profile format this Mac hasn't verified ([0015](0015-schema-guard.md)) | on, persistent | (fingerprint, profile, fingerprint) |
-| DETACHED(reason): "this Mac dropped out of *<setup>*: <reason>. Run `schrodeck resolve <setup>`" ([0030](0030-fail-closed-detach.md)). Covers store-went-backwards, store-lost, local-deleted, deck-gone, rebound, foreign-device-id, variable-collision, duplicate, stale-version-edit, apply-recovery, unknown | on, persistent | (detached, setup, reason) |
+| DETACHED(reason): "this Mac dropped out of *<setup>*: <reason>. Run `schrodeck resolve <setup>`" ([0030](0030-fail-closed-detach.md)). Covers store-went-backwards, store-lost, local-deleted, deck-gone, rebound, foreign-device-id, variable-collision, folder-conflict, stale-version-edit, apply-recovery, unknown | on, persistent | (detached, setup, reason) |
+| Archived on rejoin: "your previous copy of *<setup>* on <deck> was kept as *<name>-<datestamp>*" ([0026](0026-profile-identity.md), review F50) | on | per archive |
 | Pending edit from *<host>* on an older schrodeck version, waiting for that host to upgrade ([0027](0027-store-lifecycle.md)) | on | (pending-old, profile, that revision) |
 | A button references another profile that isn't subscribed on this Mac ([0013](0013-sync-scope-and-scripts.md)) | on | (xref, profile, target profile) |
 | Applied but unverified (`keep`) | on | (kept, profile, revision) |

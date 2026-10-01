@@ -1,6 +1,6 @@
 # 0008. Applying an update is plan → commit → verify, with a post-quit re-check
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing. Revised 2026-10-01 (review F50, F51): installs regenerate `ActionID`s, and a rejoin archives the old copy inside the same apply.
 - a post-quit re-check;
 - the incoming fingerprint is validated;
 - a verify failure ends in BLOCKED, not a retry loop;
@@ -35,7 +35,7 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
 1. **Plan** (the app still runs, and nothing is touched). Abort on any failure:
    - For each target: the incoming revision's `fingerprint` is in this host's known-good set, and its `norm_version` matches ([0015](0015-schema-guard.md), [0006](0006-normalization-and-variables.md)).
    - The target is not BLOCKED for this R (below).
-   - Stage each target in a scratch dir on the same volume. Placeholders are expanded with this host's values, `Device.UUID` is set to the receiving deck, and the folder is named per [0026](0026-profile-identity.md). The staged copy must re-hash to `hash(R)`.
+   - Stage each target in a scratch dir on the same volume. Placeholders are expanded with this host's values, `Device.UUID` is set to the receiving deck, every `ActionID` is regenerated deterministically, and the folder is named per [0026](0026-profile-identity.md). The staged copy must re-hash to `hash(R)` (the hash ignores `ActionID`). If an install's canonical folder already holds an old copy of the setup (a rejoin), the plan also stages the **archive**: a fresh folder UUID and the renamed `Name` for the old copy ([0026](0026-profile-identity.md), review F50). The archive is journaled like any other target.
    - Geometry matches ([0003](0003-decks-are-local-geometry-compatibility.md)).
    - Schema guard passes for this app version ([0015](0015-schema-guard.md)).
    - Free disk is sufficient.
@@ -45,7 +45,7 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
 3. **Quit** the app gracefully and wait for it to exit (contract A's `AppControl.Quit` guarantee). On timeout, abort: nothing touched, and the app is left running.
 4. **Post-quit re-check** (the app can no longer write): re-hash every target. If any **L ≠ L_plan**, the user or the app's quit-time flush changed the copy. **Abort the swap**, relaunch the app, and re-evaluate on the next tick. That copy is now Ahead or Diverged, and its edit is preserved.
 5. **Snapshot** (after the quit, so it includes any flushed state): copy each target's current local tree into the local history ring and verify it. `step = snapshotted`.
-6. **Swap** with atomic renames on the same volume: rename the old folder aside, then the staged one in. `step = swapped`.
+6. **Swap** with atomic renames on the same volume: rename the old folder aside, then the staged one in. For a rejoin, the old copy is renamed to its archive folder (with its `Name` rewritten) instead of aside, and it is never deleted. `step = swapped`.
 7. **Relaunch** if `app_was_running` (or if the user's setting says to always run it), then wait for it to settle (process up, files quiet). If the relaunch fails, retry once, then notify persistently. The files are already in place, and the app will load them when next opened.
 8. **Verify:** re-hash every target. If L == hash(R), move this host's head to R ([contract D](../contracts/store-format.md)); **only after that write succeeds**, set B := (R, L) (review F34). Clear the journal. If the head write fails, B is left unchanged and the next run re-evaluates: the copy is now InSync by hash and the head is retried.
 9. **On verify failure,** log the expected and actual hashes and the differing key paths, then follow `apply.on_verify_failure`:

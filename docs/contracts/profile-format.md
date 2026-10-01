@@ -18,8 +18,9 @@ Index of all contracts: [README.md](README.md).
 | P6 | `Open` actions store absolute paths in `Settings.path` | observed [R16](../references.md) | report any absolute path outside `{{HOME}}` |
 | P7 | Every file in a profile matches the allow-list below | observed | an unexpected file inside a profile folder trips the schema guard: a new file type means the format changed |
 | P9 | Instance identity: every action has an `ActionID`, and images are referenced by file name in `States[].Image`. A copy of the same content gets new `ActionID`s and new image file names | observed [R20](../references.md) | read-only: in a fixture pair (the same page copied twice), the normalized hashes are equal **only if** `ActionID` is dropped and image references are replaced by the image's content hash. Known-bad: hashing without that canonicalization must report the pair as different |
-| P10 | Two profiles on one host may carry the **same** `ActionID`s (needed if one setup is installed verbatim onto two same-geometry decks on one Mac) | **unknown** | restart tier: install a verbatim copy of a scratch profile onto a second same-geometry deck, relaunch, then check that both load and that the app didn't rewrite either copy's `ActionID`s. If the app rejects or rewrites them, installs must regenerate `ActionID`s deterministically (uuid5 of profile_id, deck_key, original id) |
-| P8 | Actions that switch to or open **another profile** (e.g. a switch-profile action) reference the target by that profile's **folder UUID**, and may also embed a device id | **likely, unverified** (review F46) | scan action settings for UUID-shaped values that match another local `.sdProfile` folder name, and for `@(` device ids. Report each reference with its key path. A matched profile reference is an inventory dependency (ADR [0013](../adr/0013-sync-scope-and-scripts.md)); a device id other than this copy's own refuses the push (ADR [0006](../adr/0006-normalization-and-variables.md)) |
+| P10 | Two profiles on one host may carry the **same** `ActionID`s | **unknown; informational only** (review F51) | not a gate: every install **always regenerates** `ActionID`s deterministically (ADR [0026](../adr/0026-profile-identity.md)), so schrodeck never creates duplicates, not even between a template and its first member copy. The restart-tier probe still records what the app does with a duplicate, for the record |
+| P8 | Actions that switch to or open **another profile** (e.g. a switch-profile action) reference the target by that profile's **folder UUID**, and may also embed a device id | **likely, unverified** (review F46) | scan action settings for UUID-shaped values that match another local `.sdProfile` folder name, and for `@(` device ids. Report each reference with its key path. A matched profile reference is an inventory dependency (ADR [0013](../adr/0013-sync-scope-and-scripts.md)); a device id other than this copy's own makes the copy **DETACHED(foreign-device-id)** (ADR [0030](../adr/0030-fail-closed-detach.md), review F56) |
+| P11 | Page folder UUIDs are per copy: the same page in two profiles has different `Profiles/<page>` folder names. The ordered `Pages.Pages` list and `Pages.Default` refer to pages by those UUIDs | observed [R20](../references.md) (the copied page's folder UUID differed) | read-only: in the fixture pair, the normalized hashes are equal only with page canonicalization (step 2 below). Known-bad: hashing raw page UUIDs reports the pair as different. How a **folder** button references its sub-page is still unknown (config model U-row P9), so folder sub-pages are not canonicalized yet |
 
 ## File allow-list
 
@@ -34,18 +35,20 @@ Known junk is **ignored silently** for hashing and copying: `.DS_Store`, sync-cl
 
 ## Normalized hash
 
-`hash` is what direction detection compares (ADR [0005](../adr/0005-direction-detection-three-way-hash.md)). It must change on a real user edit and on nothing else. The current definition is `norm_version = 1`:
+`hash` is what direction detection compares (ADR [0005](../adr/0005-direction-detection-three-way-hash.md)). It must change on a real user edit and on nothing else. The current definition is `norm_version = 1` (revised 2026-10-01, review F55):
 
-1. Take every allow-listed file. Paths are relative, use `/` as the separator, and are in Unicode **NFC**.
-2. For each `manifest.json`:
+1. **Inputs are the manifests only:** the top-level `manifest.json` and every allow-listed `Profiles/<page>/manifest.json`. Image files are not hashed on their own; an image counts only through a reference to it (step 3), so an **orphaned** image file (unreferenced, which the app may leave behind and clean up later) never changes the hash. A reference to an image file that doesn't exist hashes as `missing:<referenced name>`. (In the store, a missing file is also a `tree_digest` mismatch and therefore InFlight.)
+2. **Canonical page names.** Each page folder is relabeled for hashing: a page listed in `Pages.Pages` becomes `page/<index>` (its position in that ordered list), the page `Pages.Default` points to becomes `default`, and any other page folder (e.g. a folder button's sub-page, whose encoding is still unknown, P11) keeps its UUID as `other/<UUID>`. Every occurrence of a relabeled page UUID inside the manifests (`Pages.Pages`, `Pages.Default`, and any action-settings value equal to a page UUID of this profile) is replaced by its label. **Why this is sound:** page folder UUIDs change on copy (P11) while the ordered page list is user-meaningful, so reordering pages is still a real change. Paths use `/` and Unicode **NFC**.
+3. For each manifest:
    - parse it as JSON;
    - remove the strip-list fields (action `State`, `Pages.Current`, top-level `Device.UUID`, and every action's **`ActionID`** [R20](../references.md)), which are one named constant in the code;
-   - replace every image **reference** (`States[].Image` and any other `Images/<file>` value) with the referenced file's content hash, so identical images under different file names hash the same [R20](../references.md). Image files are still hashed by content, but **without their file names**;
+   - replace every image **reference** (`States[].Image` and any other `Images/<file>` value) with the referenced file's content hash (`sha256` of its bytes), so identical images under different file names hash the same and two buttons that swap images change the hash [R20](../references.md);
    - **canonicalize it with RFC 8785 (JSON Canonicalization Scheme)**.
 
    A stored tree is already in placeholder form (variables and `{{DEVICE}}`). A local copy is first put into placeholder form (ADR 0006).
-3. For each image, use the raw bytes.
-4. `hash = sha256` over the lines `<path>\0<sha256(canonical bytes)>\n`, sorted bytewise by path.
+4. `hash = sha256` over the lines `<canonical path>\0<sha256(canonical bytes)>\n`, sorted bytewise by canonical path.
+
+**What this guarantees:** two copies of the same setup whose pages are all in `Pages.Pages` hash equal regardless of folder UUIDs, `ActionID`s, image file names, and orphaned images. Setups that contain folder sub-pages hash equal only if those sub-page UUIDs match (until P11's folder encoding is known); copies made by schrodeck keep page UUIDs, so this affects only independently made copies.
 
 Any change to steps 1–4, including the strip list, increments `norm_version` and ships as a store `FORMAT` migration (ADR [0027](../adr/0027-store-lifecycle.md)). Hashes are only ever compared under the same `norm_version`.
 

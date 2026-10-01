@@ -1,6 +1,6 @@
 # 0030. Fail closed: an unexpected change drops that Mac out of the setup
 
-Status: Accepted 2026-10-01 (owner's decision; governs every "stop" path in the other ADRs)
+Status: Accepted 2026-10-01 (owner's decision; governs every "stop" path in the other ADRs). Revised 2026-10-01 (review F50, F54, F57; owner's decision): a detached copy is **never destroyed**; an explicit rejoin onto the same device **archives** it (moved + renamed) and tells the user. "Replace this detached copy" is folded into that rejoin. The unreachable "duplicate" row becomes "canonical folder occupied".
 
 ## Context
 
@@ -12,17 +12,16 @@ The owner's rule: **any configuration change outside schrodeck's expectations ma
 
 **DETACHED(reason)** is a per-copy state (one setup's member copy on one Mac):
 
-- **The local profile is left exactly as it is.** No apply, no restore, no rename, no delete.
-- **Nothing is pushed or pulled for that setup on that Mac.** This Mac's head stays where it was. Other Macs are unaffected: a detached host's head is at most an older revision, so it never blocks or changes R for anyone else ([contract D](../contracts/store-format.md)).
+- **The local profile is never destroyed.** While DETACHED it is left exactly as it is: no apply, no restore, no rename, no delete. The only thing that ever moves it is an explicit rejoin onto the same device, which **archives** it (moved to its own folder, renamed `<name>-<datestamp>`) and calls that out to the user ([0026](0026-profile-identity.md)).
+- **Nothing is pushed or pulled for that setup on that Mac.** This Mac's head stays where it was, and other Macs treat it like any other head ([contract D](../contracts/store-format.md)). Usually that is an older revision, which other Macs' R already subsumes, so it changes nothing for them. If the Mac detached while its head was a **fork tip** (it had pushed a concurrent edit, then detached), the setup stays Forked on every Mac, and a `resolve` on any other Mac must account for that tip like any other: the detached Mac's edit is never lost, and the detach doesn't block resolving it elsewhere (review F54).
 - **One notification**, deduplicated ([0016](0016-notifications.md)), naming the setup, the reason, and the resolve command. The same reason is shown in `status` and the event trail.
 - **It never clears by itself.** It persists across runs and reboots until the user resolves it.
 - **`schrodeck resolve <setup>`** offers only the options the reason allows:
-  1. **Rejoin as a new profile:** install the setup's current version (R) on a destination device as a **new** member copy. The detached profile stays as an ordinary local profile.
-  2. **Replace this detached copy:** overwrite **only** the detached member copy with R, after explicit confirmation and a restore point. Never any other profile.
-  3. **Publish this copy:** push the detached copy's content as a new revision whose parent is R, so it becomes the setup's version everywhere. Offered only when the cause allows it (see the table); still subject to the schema guard, the device-id check and the collision guard.
-  4. **Unmap:** leave the setup on this Mac. The profile becomes an ordinary local profile, and the subscription is removed from this host's `hosts/<host_id>.toml`.
+  1. **Rejoin:** install the setup's current version (R) on a compatible device chosen by the user, as the member copy under the canonical folder and name. If that device already holds this detached copy (or an earlier copy of the setup), that copy is **archived** first: moved to its own folder and renamed `<name>-<YYYY-MM-DD-HHMM>`, named in the dry-run rundown before confirmation and in a notification afterwards ([0026](0026-profile-identity.md)). On another device, the detached profile simply stays as an ordinary local profile. Either way nothing is destroyed.
+  2. **Publish this copy:** push the detached copy's content as a new revision whose parent is R, so it becomes the setup's version everywhere. Offered only when the cause allows it (see the table); still subject to the schema guard, the device-id check and the collision guard.
+  3. **Unmap:** leave the setup on this Mac. The profile becomes an ordinary local profile, and the subscription is removed from this host's `hosts/<host_id>.toml`.
 
-  Consistent with [0029](0029-problem-statement-and-setup-model.md): resolving never brings another profile's config into the setup, and never touches a profile other than the detached copy.
+  Consistent with [0029](0029-problem-statement-and-setup-model.md): resolving never brings another profile's config into the setup, and the only profile it ever moves is the detached copy (archived, never overwritten).
 
 **Classification of every non-normal state.** Each is either an **expected** state with defined handling, or **unexpected**, in which case it becomes DETACHED(reason):
 
@@ -39,15 +38,15 @@ The owner's rule: **any configuration change outside schrodeck's expectations ma
 | Schema guard tripped (this Mac's app changed the profile format) | expected, host-wide | all pushes and applies pause until `doctor` passes ([0015](0015-schema-guard.md)). Already fail-closed, at host scope | `doctor` |
 | **Member copy deleted in the app** | **unexpected** | DETACHED(local-deleted) | rejoin, unmap (default suggestion) |
 | **Store copy vanished** (store fresh, no heads, no tombstone; persisting) | **unexpected** | DETACHED(store-lost). No longer auto-clears when heads reappear: the user decides | publish (re-creates the setup's history from this copy), unmap |
-| **Store went backwards** (R doesn't subsume B; own head lost or a provider restore) | **unexpected** | DETACHED(store-went-backwards) | rejoin, replace, publish, unmap |
-| **Deck gone** (the member copy's device disappeared from the app's device list, e.g. an expired virtual deck) | **unexpected** | DETACHED(deck-gone). No longer auto-resumes when the deck returns | rejoin onto another compatible device, unmap |
-| **Member copy re-bound** (its `Device.UUID` now names a different device) | **unexpected** | DETACHED(rebound) | rejoin, replace, unmap |
-| **Foreign device id** in the copy (a device id other than its own) | **unexpected** | DETACHED(foreign-device-id). Replaces "refuse the push" ([0006](0006-normalization-and-variables.md)) | replace, unmap; publish after the user removes the reference |
-| **Variable collision** (a literal equal to another host's variable value) | **unexpected** | DETACHED(variable-collision). Replaces "refuse the push" ([0006](0006-normalization-and-variables.md)) | replace, unmap; publish after the user fixes the button |
-| **Duplicate member copy** (two local folders claim the same `profile_id` and device) | **unexpected** | DETACHED(duplicate) | replace one (user picks), unmap |
-| **Late older-version edit** (this Mac edited under an old `norm_version` after `migrate`, then upgraded) | **unexpected** | DETACHED(stale-version-edit). Replaces the former Anomaly path ([0027](0027-store-lifecycle.md)) | publish (re-hashed under the new version), replace, unmap |
-| **Apply journal unreadable or inconsistent** after a crash | **unexpected** | DETACHED(apply-recovery) for every target in the journal; the app's running state is restored ([0008](0008-two-phase-apply.md)) | replace, publish, unmap |
-| Anything else a check finds that isn't in this table | **unexpected** | DETACHED(unknown: <detail>) | rejoin, replace, unmap |
+| **Store went backwards** (R doesn't subsume B; own head lost or a provider restore) | **unexpected** | DETACHED(store-went-backwards) | rejoin, publish, unmap |
+| **Deck gone** (the member copy's device disappeared from the app's device list, e.g. an expired virtual deck) | **unexpected** | DETACHED(deck-gone). No longer auto-resumes when the deck returns | rejoin (onto another compatible device, or onto the same one once it is back, which archives this copy), unmap |
+| **Member copy re-bound** (its `Device.UUID` now names a different device) | **unexpected** | DETACHED(rebound) | rejoin, unmap |
+| **Foreign device id** in the copy (a device id other than its own) | **unexpected** | DETACHED(foreign-device-id). Replaces "refuse the push" ([0006](0006-normalization-and-variables.md)) | rejoin, unmap; publish after the user removes the reference |
+| **Variable collision** (a literal equal to another host's variable value) | **unexpected** | DETACHED(variable-collision). Replaces "refuse the push" ([0006](0006-normalization-and-variables.md)) | rejoin, unmap; publish after the user fixes the button |
+| **Canonical folder occupied** (the member copy's canonical uuid5 folder holds a profile that local state can't account for and this host's head can't recover) | **unexpected** | DETACHED(folder-conflict) (review F57; replaces the unreachable "duplicate" row) | rejoin (archives the occupant), unmap |
+| **Late older-version edit** (this Mac edited under an old `norm_version` after `migrate`, then upgraded) | **unexpected** | DETACHED(stale-version-edit). Replaces the former Anomaly path ([0027](0027-store-lifecycle.md)) | publish (re-hashed under the new version), rejoin, unmap |
+| **Apply journal unreadable or inconsistent** after a crash | **unexpected** | DETACHED(apply-recovery) for every target in the journal; the app's running state is restored ([0008](0008-two-phase-apply.md)) | rejoin, publish, unmap |
+| Anything else a check finds that isn't in this table | **unexpected** | DETACHED(unknown: <detail>) | rejoin, unmap |
 
 The last row is the rule itself: **a state not classified as expected is unexpected.** Implementations must not add silent fallbacks.
 
@@ -71,7 +70,8 @@ The last row is the rule itself: **a state not classified as expected is unexpec
 No check yet; to be written in the plan:
 - For **each** unexpected row: a fixture that triggers it ⇒ DETACHED(that reason), no write-open on any app file (filesystem-port assertion), no store write except this host's event line, exactly one notification over 10 runs, and the state persists across runs. Known-bad: an implementation that auto-clears (e.g. heads reappear after StoreLost) must fail.
 - `resolve` offers exactly the options listed for the reason (golden `--json` output per reason, contract E).
-- "Replace" touches only the detached copy: with another profile of the same name on the same device, that profile is never opened for writing.
+- Rejoin onto the same device archives the detached copy (moved + renamed, content otherwise byte-identical) and never opens any other profile for writing; with another profile of the same name on that device, that profile is untouched. Known-bad: an implementation that overwrites the detached copy in place must fail (its original bytes must still exist afterwards).
+- A Mac that detaches while holding a fork tip ⇒ the setup stays Forked on other Macs, and `resolve --keep` on another Mac can choose that tip's content (review F54).
 - An unclassified condition injected by a test hook ⇒ DETACHED(unknown), never a silent continue.
 
 ## References

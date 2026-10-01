@@ -12,7 +12,7 @@ You have an XL at every desk (or one XL on a switch) and want the same buttons e
 
 ## The approach
 
-- **Setups, seeded from a template.** On the first machine, `schrodeck init` lists your decks; you pick one and a profile on it as the **template**, and name the setup. schrodeck creates a **new** profile from it, e.g. `schrodeck - 8x4 - Work`. Your template is never modified.
+- **Setups, seeded from a template.** On the first machine, `schrodeck init` lists your decks; you pick one and a profile on it as the **template**, and name the setup. schrodeck publishes it as the setup and installs it back as a **new** profile, e.g. `schrodeck - 8x4 - Work`. Your template is never modified.
 - **Joining.** On another machine, `schrodeck join <shared folder>` lists only the setups that fit a deck you have (same columns × rows and dials), you pick a destination deck, and it creates a **new** profile there. It never replaces your existing profiles, and never pulls your other machine's config into the setup. From then on every copy is a peer: edit any of them and the others follow.
 - **Fail closed.** If a synced profile changes in a way schrodeck doesn't expect (you deleted it, its deck disappeared, it suddenly references another deck…), that machine drops out of that setup, leaves the profile exactly as it is, tells you once, and waits for `schrodeck resolve`. Profiles that aren't part of a setup are never touched.
 - A small CLI (`schrodeck`, written in Go) runs on every machine from launchd. It runs when profile files or the shared folder change, on a safety timer, or by hand. It can optionally also run on deck attach.

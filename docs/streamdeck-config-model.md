@@ -70,10 +70,11 @@ On the observed Mac, the same page exists in two profiles (a Stream Deck profile
 | Action settings, titles, states (except image references) | **yes** |
 | Image bytes | **yes** |
 | Each action's `ActionID` | **no**: new per copy |
+| Page folder UUIDs (`Profiles/<page>`) | **no**: new per copy (the copied page has a different folder UUID) |
 | Image file names (`Images/<id>.png`) | **no**: new per copy |
 | Position on the bigger deck | kept as-is (top-left), no re-flow |
 
-Consequence for schrodeck: "the same setup" has to mean **the same content**, not the same ids. The hash ignores `ActionID` and compares images by content, so two independently made identical setups are recognized as identical (contract C hash definition, P9).
+Consequence for schrodeck: "the same setup" has to mean **the same content**, not the same ids. The hash ignores `ActionID`, relabels page folders by their position in `Pages.Pages`, and compares images through their references by content ([contract C](contracts/profile-format.md) P9, P11). Two independently made identical setups therefore hash equal **as long as every page is in `Pages.Pages`**. Folder sub-pages keep their UUID in the hash until the folder encoding is known (U-row P9), so independently made setups with folders may hash different; copies schrodeck makes keep page UUIDs, so they're unaffected. When schrodeck installs a copy it keeps page UUIDs and image names and **regenerates every `ActionID`** ([ADR 0026](adr/0026-profile-identity.md)), so it never creates duplicate `ActionID`s on one Mac.
 
 ## Layout combinations schrodeck has to handle
 
@@ -94,7 +95,7 @@ Consequence for schrodeck: "the same setup" has to mean **the same content**, no
 | U2 | What the 0-action page folder that `Pages.Default` points to is (an empty start page? a template?) | Create a fresh profile in the app, diff before/after; check whether `Default` changes when pages are reordered. Contract C row |
 | U3 | What `AppIdentifier` means. It appears on two "Default Profile"s, so it may not mean "smart profile" | Create a smart profile linked to one app, diff the manifest; compare with a plain profile. Contract C row |
 | U4 | Why the virtual deck's selected profile id has no folder on disk (lazy creation?) | Open the virtual deck in the app, check whether the folder appears |
-| U6 | Whether two profiles on one Mac may share `ActionID`s (a verbatim copy of one setup onto two same-size decks) | contract C P10 |
+| U6 | Whether two profiles on one Mac may share `ActionID`s | contract C P10. **Informational only:** schrodeck regenerates `ActionID`s on every install, so it never creates duplicates (review F51) |
 | U5 | Whether several virtual decks share `@(0)[]` or get distinct keys | Create a second virtual deck, read the prefs `Devices` keys |
 | P9 | How a folder button encodes its target page (the page UUID in action settings?) | Already covered by contract C P8 (profile-reference probe) |
 
@@ -117,7 +118,7 @@ schrodeck syncs at the **profile** level and installs each copy onto a local **d
 
 **How a setup is built** (ADR [0029](adr/0029-problem-statement-and-setup-model.md), onboarding in [0022](adr/0022-onboarding-init-and-join.md)):
 
-1. **First computer (`init`, or `share` later):** schrodeck reads the app's config and lists the devices. You pick a device and a **template** profile on it, and name the setup. schrodeck creates a **new** profile on that device, copied from the template and named `schrodeck - <cols>x<rows> - <name>` (e.g. `schrodeck - 8x4 - Work`). That copy is the setup's first **member copy**. The template is never modified or synced. The setup records the template device's geometry.
+1. **First computer (`init`, or `share` later):** schrodeck reads the app's config and lists the devices. You pick a device and a **template** profile on it, and name the setup. schrodeck reads the template **read-only**, publishes it to the store as the setup's root revision (with the name `schrodeck - <cols>x<rows> - <name>`, e.g. `schrodeck - 8x4 - Work`), and then installs it back onto that device through the ordinary install path, which creates a **new** profile: the setup's first **member copy**. The template is never modified or synced. The setup records the template device's geometry.
 2. **Other computers (`join`, or `subscribe` later):** schrodeck lists the setups whose geometry matches one of this computer's devices. You pick a setup and a **destination device**, and schrodeck creates a **new** profile there. It never replaces or modifies an existing profile, and a joining computer's own profiles are never brought into a setup. Merging two computers' configs is out of scope (possible by hand, at your own risk).
 3. **From then on, all member copies are peers.** An edit on any of them reaches every other.
 

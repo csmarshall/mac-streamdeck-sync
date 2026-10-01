@@ -39,15 +39,15 @@ Normally `B.local_hash` equals the hash of `B.revision`. They differ only after 
 | this host's `norm_version` is older than R's, or the store `FORMAT` is newer than this host's | VersionMismatch | read-only for this profile; notify once ([0027](0027-store-lifecycle.md)). Heads at an **older** `norm_version` than this host's don't trigger this: they are ignored for R (review F28). One that isn't an ancestor of the rebase revision is reported as a **pending older-version edit** (status, event, one notification), never silently dropped (review F42) |
 | live heads don't converge (no R) | Forked | push this host's unpushed local edit, if any, as its own revision so it is preserved; then wait for `resolve` ([0007](0007-conflict-policy.md)) |
 | R does not subsume `B.revision` | DETACHED(store-went-backwards) | stop, notify once; never read as Behind (own head lost or a provider restore) (review F34, [0030](0030-fail-closed-detach.md)) |
-| the copy's device is gone, the copy was re-bound to another device, holds a foreign device id or a colliding variable literal, is duplicated, or its apply journal is unreadable | DETACHED(reason) | per the classification table in [0030](0030-fail-closed-detach.md) |
+| the copy's device is gone, the copy was re-bound to another device, holds a foreign device id or a colliding variable literal, has its canonical folder occupied (folder-conflict), or its apply journal is unreadable | DETACHED(reason) | per the classification table in [0030](0030-fail-closed-detach.md) |
 | L == hash(R) | InSync | B := (R, L), after moving this host's head to R if it isn't already ≡ R |
 | L == B.local_hash, R ≢ B.revision | Behind | apply ([0008](0008-two-phase-apply.md)), unless this host has BLOCKED(R) or the incoming fingerprint is unknown here |
 | L ≠ B.local_hash, R ≡ B.revision | Ahead | push a revision whose parent is R ([0009](0009-store-write-protocol.md)); who may push: [0021](0021-who-may-push.md) |
 | L ≠ B.local_hash, R ≢ B.revision, and this host is BLOCKED(R) or refuses R's fingerprint | HoldLocal | **don't push** (a push would fork the whole group over one incompatible host); notify once, deduplicated: "this Mac can't take version X of *<profile>*, so your edit is local only" (owner's decision, review F32). It re-evaluates when R changes, the block is cleared, or the fingerprint becomes known |
 | L ≠ B.local_hash, R ≢ B.revision | Diverged | push the local edit as a revision with parent B.revision (the store now shows a fork), notify, wait for `resolve` ([0007](0007-conflict-policy.md)) |
-| no B; this host is sharing the profile and there are no heads | FirstShare | push the root revision |
+| no B; this host is publishing a new setup (`init`/`share`) and there are no heads | FirstShare | push the root revision built read-only from the template; this host then installs it like any other host (Install row), review F52 |
 | no B; this host's own head exists | Recover | B := (own head's revision, its hash); then re-evaluate. A host that lost its local state rebuilds B from the head it wrote (review F38), so it sees InSync or Ahead, not a spurious Diverged |
-| no B; a `subscribe` is pending | Install | apply R as a new member copy on the chosen destination device ([0026](0026-profile-identity.md), [0029](0029-problem-statement-and-setup-model.md)) |
+| no B; a `subscribe` is pending | Install | apply R as a new member copy on the chosen destination device (`ActionID`s regenerated; an existing copy of this setup on that device is archived first, review F50/F51; [0026](0026-profile-identity.md), [0029](0029-problem-statement-and-setup-model.md)) |
 
 ![sync state diagram](../sync-states.png)
 

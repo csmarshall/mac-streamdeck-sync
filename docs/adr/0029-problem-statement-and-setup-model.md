@@ -1,6 +1,6 @@
 # 0029. Problem statement and setup model: the same setup on a deck at every computer
 
-Status: Accepted 2026-10-01 (reframe: template-seeded setups; owner's decisions)
+Status: Accepted 2026-10-01 (reframe: template-seeded setups; owner's decisions). Revised 2026-10-01 (review F52, F53; owner's decision): a setup is created by **publishing first, then installing** on the first Mac through the ordinary install path. No special seed path exists.
 
 ## Context
 
@@ -24,8 +24,8 @@ Each host may have one **member copy** of a setup per chosen device. Member copi
 
 1. schrodeck reads the app's config and lists this Mac's devices.
 2. The user picks a device, then a **template** profile on it, and names the setup.
-3. schrodeck creates a **new** profile on that same device, copied from the template and named `schrodeck - <cols>x<rows> - <name>`. This copy is the setup's first member. **The template itself is never modified, never synced, and never becomes a member.** It's just where the content came from.
-4. Creating the copy writes to the app's files, so it goes through the two-phase apply ([0008](0008-two-phase-apply.md)), and the first push follows.
+3. **Publish (read-only on the app's side).** schrodeck reads the template's files and builds the setup's **root tree** in staging: the template's content, put into placeholder form ([0006](0006-normalization-and-variables.md)), with the profile `Name` set to `schrodeck - <cols>x<rows> - <name>`. It pushes that as the setup's root revision ([contract D](../contracts/store-format.md)). Nothing in the app's data is opened for writing in this step. **The template itself is never modified, never synced, and never becomes a member.** It's just where the content came from.
+4. **Install on this Mac, like any other.** The first Mac is a peer from the start: it installs the root revision onto the chosen device through the ordinary install apply ([0008](0008-two-phase-apply.md), [0026](0026-profile-identity.md)), exactly as a joining Mac would. That creates the **new** member profile. There is no special seed path, so crash behavior is just the normal push and install behavior: a crash after the push leaves a published setup that this Mac is not yet a member of; `status` says so, and `schrodeck subscribe <setup>` installs it (a re-run of `init`/`share` detects the half-finished setup and offers the same).
 
 **Joining a setup (`join <dir>` on a new Mac, `subscribe` later):**
 
@@ -65,7 +65,8 @@ Each host may have one **member copy** of a setup per chosen device. Member copi
 ## Verified by
 
 No check yet; to be written in the plan:
-- `init`/`share`: the template profile is **never opened for writing** (filesystem-port assertion). Exactly one new profile appears, on the chosen device, named `schrodeck - <c>x<r> - <name>`, with normalized content equal to the template's.
+- `init`/`share`: the template profile is **never opened for writing** (filesystem-port assertion). The publish step opens nothing under the app's data root for writing. After install, exactly one new profile appears, on the chosen device, named `schrodeck - <c>x<r> - <name>`. Its normalized hash equals the template's **with the template's `Name` overridden to the setup name** (review F53). Known-bad: a copy whose name wasn't changed must fail this check, and comparing without the override must report them different.
+- A crash injected between the root push and the install ⇒ the setup exists in the store, this Mac has no member yet and no partial profile, and `subscribe` (or the re-run) installs it through the normal path.
 - `join`/`subscribe`: the setup list contains only setups whose geometry matches a local device (known-bad: a fixture setup of another geometry must not be listed). Exactly one new profile is created on the chosen destination, and no existing profile is opened for writing.
 - Peers: an edit on the joining Mac's member copy reaches the first Mac's member copy (and never the template).
 

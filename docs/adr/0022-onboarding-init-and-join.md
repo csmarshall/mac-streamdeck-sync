@@ -1,6 +1,6 @@
 # 0022. Onboarding: `init` creates a setup from a template; `join` adds a new member copy
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F13, F16): join never replaces existing local profiles, subscribing is chosen in the rundown, and the agent install moves to the milestone that can do it safely. Revised 2026-10-01 (reframe: template-seeded setups): `init` picks a device and a template and creates a new named member copy; `join` lists only geometry-compatible setups and always creates a new profile on a chosen destination device; the old rename suggestion is replaced by the member copy's fixed name.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F13, F16): join never replaces existing local profiles, subscribing is chosen in the rundown, and the agent install moves to the milestone that can do it safely. Revised 2026-10-01 (reframe: template-seeded setups): `init` picks a device and a template and creates a new named member copy; `join` lists only geometry-compatible setups and always creates a new profile on a chosen destination device; the old rename suggestion is replaced by the member copy's fixed name. Revised 2026-10-01 (review F50, F52, F53; owner's decisions): `init`/`share` **publish first** (root built read-only from the template) and then install on the first Mac through the ordinary install path; a re-subscribe onto a deck that still holds an old copy **archives** it and says so in the rundown.
 
 ## Context
 
@@ -13,16 +13,15 @@ stateDiagram-v2
     direction TB
     [*] --> Preflight1: Mac 1 runs schrodeck init
     Preflight1 --> PickTemplate: app installed, config readable,<br/>schema guard passes
-    PickTemplate --> NamedCopy: user picks a device and a template profile,<br/>names the setup
-    NamedCopy --> FirstPush: new profile "schrodeck - 8x4 - Work"<br/>via two-phase apply, template untouched
-    FirstPush --> Preflight2: Mac 2 runs schrodeck join dir
-    Preflight2 --> SetupList: store FORMAT known, store fresh
-    SetupList --> Destination: setups filtered to geometries<br/>that match a device on this Mac
-    Destination --> Rundown: user picks a setup and a destination device
-    Rundown --> NewProfile: dry run shows every change, user confirms
-    NewProfile --> FirstSync: always a NEW profile, nothing replaced
-    FirstSync --> AgentInstalled: success, synchronous, in the foreground
-    FirstSync --> RolledBack: failure, nothing kept, no host file, no agent
+    PickTemplate --> BuildRoot: user picks a device and a template profile,<br/>names the setup
+    BuildRoot --> Publish: root tree built read-only in staging,<br/>Name set to schrodeck - 8x4 - Work
+    Publish --> InstallHere: root revision pushed,<br/>template never opened for writing
+    InstallHere --> Preflight2: ordinary install apply on Mac 1,<br/>ActionIDs regenerated
+    Preflight2 --> SetupList: Mac 2 runs schrodeck join dir,<br/>store FORMAT known and fresh
+    SetupList --> Rundown: user picks a setup and a destination device<br/>from setups whose geometry matches
+    Rundown --> Install: dry run shows every change<br/>and any archive, user confirms
+    Install --> AgentInstalled: new member profile, first sync<br/>succeeds in the foreground
+    Install --> RolledBack: failure, nothing kept,<br/>no host file, no agent
     AgentInstalled --> [*]
     RolledBack --> [*]
 ```
@@ -32,8 +31,8 @@ stateDiagram-v2
 1. **Preflight:** the Stream Deck app is installed and its config is readable (profiles directory, prefs, a fingerprint that passes the schema guard, ADR [0015](0015-schema-guard.md)). If not, fail with a plain message saying what is missing. Never create a half-configured store.
 2. **Choose the shared directory.** schrodeck suggests candidates (Dropbox, then iCloud Drive, ADR [0010](0010-host-identity-and-config-layering.md)) and writes `FORMAT`, the common config and this Mac's `hosts/<host_id>.toml`.
 3. **Choose the template:** schrodeck lists this Mac's devices, then the profiles on the chosen device. The user picks a device, a template profile, and a setup name.
-4. **Create the member copy:** a **new** profile on the same device, copied from the template and named `schrodeck - <cols>x<rows> - <name>` (e.g. `schrodeck - 8x4 - Work`). It gets a new `profile_id` ([0026](0026-profile-identity.md)). **The template is never opened for writing.** Creating the profile writes to the app's files and restarts the app, so it goes through the two-phase apply ([0008](0008-two-phase-apply.md)), with a dry-run preview first.
-5. **First push** of the setup's root revision. Only after it succeeds, and from M4 on, is the background agent ([0012](0012-triggers.md)) installed. The package never installs it ([0028](0028-distribution-brew-tap-and-pkg.md)).
+4. **Publish:** build the setup's root tree **read-only** from the template in staging, with the profile `Name` set to `schrodeck - <cols>x<rows> - <name>` (e.g. `schrodeck - 8x4 - Work`), assign a new `profile_id` ([0026](0026-profile-identity.md)), and push the root revision. **Nothing under the app's data root is opened for writing**, so this step needs no app restart. Its dry run shows the root tree and the target store.
+5. **Install on this Mac** through the ordinary install apply ([0008](0008-two-phase-apply.md)), exactly as a joining Mac would ([0029](0029-problem-statement-and-setup-model.md)): a **new** member profile on the chosen device, `ActionID`s regenerated ([0026](0026-profile-identity.md)), with the same dry-run rundown and confirmation as `join`. Only after it succeeds, and from M4 on, is the background agent ([0012](0012-triggers.md)) installed. The package never installs it ([0028](0028-distribution-brew-tap-and-pkg.md)).
 
 `schrodeck share` on any later Mac runs steps 3 to 5 to add another setup.
 
@@ -45,6 +44,7 @@ stateDiagram-v2
 4. **Dry run, nothing touched.** Print a rundown of exactly what accepting would do:
    - for each chosen setup, the **new** profile that will be created, its name, and its destination device;
    - that **no existing local profile is replaced or modified**, and that this Mac's existing configuration is **not** brought into any setup;
+   - **if the destination device already holds a copy of this setup** (a DETACHED copy, or one left behind by an earlier `unmap`): that it will be **archived**, i.e. moved to its own folder and renamed `<name>-<YYYY-MM-DD-HHMM>`, and kept. If it is currently the deck's selected profile, the app will select another one after the restart. Cross-profile buttons that pointed at it will point at the archive (listed). See [0026](0026-profile-identity.md);
    - the restore point that will be taken first;
    - missing plugins, scripts and Shortcuts;
    - variables that need a value on this Mac.
@@ -81,7 +81,8 @@ stateDiagram-v2
 ## Verified by
 
 No check yet; to be written in the plan. Required tests:
-- `init`: the template is never opened for writing (filesystem-port assertion). Exactly one new profile is created, with the expected name and normalized content equal to the template's.
+- `init`: the template is never opened for writing (filesystem-port assertion), and the publish step opens nothing under the app's data root for writing. After install, exactly one new profile exists, with the expected name; its normalized hash equals the template's **with the template's `Name` overridden to the setup name** (review F53). Known-bad: an unrenamed copy must fail, and so must a comparison without the override.
+- Re-subscribe onto a deck holding an old copy of the setup ⇒ the rundown names the archive; after accepting, the old copy exists, byte-identical apart from its folder and `Name`, and one notification names it.
 - Dry-run `init`/`join`: **no file under the app's data root or the store is opened for writing**, asserted at the filesystem-port level. Byte comparison of the app's files would be fooled by the running app's own rewrites. Known-bad: a dry run that stages beside the target must fail.
 - `join`'s setup list contains only geometry-compatible setups (known-bad: a fixture of another geometry must not be offered as a destination).
 - A join whose first apply fails leaves no LaunchAgent, no `hosts/<host_id>.toml`, and no head.

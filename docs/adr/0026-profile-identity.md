@@ -1,6 +1,6 @@
 # 0026. Profile identity: a schrodeck `profile_id`, mapped to local folders per host
 
-Status: Accepted 2026-10-01 (review F16). Revised 2026-10-01 (review round 2: F31, F38): the deck key is the app's prefs device key and must be unique on the host; a lost local state is rebuilt from this host's own head. Revised 2026-10-01 (reframe: template-seeded setups; fail closed): **every** member copy, including the first one created by `init`/`share`, is a new profile with a derived folder name. The template is never a member. Deck loss becomes DETACHED(deck-gone) ([0030](0030-fail-closed-detach.md)).
+Status: Accepted 2026-10-01 (review F16). Revised 2026-10-01 (review round 2: F31, F38): the deck key is the app's prefs device key and must be unique on the host; a lost local state is rebuilt from this host's own head. Revised 2026-10-01 (reframe: template-seeded setups; fail closed): **every** member copy, including the first one created by `init`/`share`, is a new profile with a derived folder name. The template is never a member. Deck loss becomes DETACHED(deck-gone) ([0030](0030-fail-closed-detach.md)). Revised 2026-10-01 (review F50, F51, F57; owner's decisions): every install regenerates `ActionID`s deterministically; rejoining onto a deck that already holds an old copy of the setup **archives** that copy (moved to its own folder, renamed `<name>-<datestamp>`) instead of colliding with it; the unreachable "duplicate" case is replaced by "canonical folder occupied".
 
 ## Context
 
@@ -17,7 +17,16 @@ Virtual decks need a physical deck seen within the last 30 days, or they go away
 - **`profile_id`** is a random UUIDv4 assigned by `init`/`share` when a setup is created from a template ([0029](0029-problem-statement-and-setup-model.md)), recorded in the write-once `profiles/<profile_id>/profile.json.<host_id>` ([contract D](../contracts/store-format.md)). It never changes. A profile's display name is just content, so renames sync as ordinary edits.
 - **Every member copy is a profile schrodeck created** ([0029](0029-problem-statement-and-setup-model.md)), on every host, including the one that created the setup from a template. The template's folder is never part of the mapping. Local state maps `member folder UUID → (profile_id, deck_key)`.
 - **Cross-profile references** (a button that switches to another profile by its folder UUID, [contract C](../contracts/profile-format.md) P8, likely, unverified) are translated through the same mapping: stored as the target's `profile_id`, expanded on install to the target's local folder on this host if it is subscribed here, otherwise reported as a dangling dependency ([0013](0013-sync-scope-and-scripts.md), review F46).
-- **Every member copy** (the creating host's first copy and every joiner's copy alike) lives in a new folder named `uuid5(NAMESPACE_SCHRODECK, profile_id + ":" + deck_key)`. The name is deterministic, so a host that loses its local state can rebuild the mapping by recomputing the names. A member copy never reuses an existing local folder.
+- **Every member copy** (the creating host's first copy and every joiner's copy alike) lives in the **canonical folder** `uuid5(NAMESPACE_SCHRODECK, profile_id + ":" + deck_key)`. The name is deterministic, so a host that loses its local state can rebuild the mapping by recomputing the names.
+- **What an install copies and what it regenerates** (review F51, owner's decision). Page folder UUIDs and image file names are **kept**: they live inside the profile's own folder, like file names (contract C P11). Every action's **`ActionID` is regenerated on every install**, including the first member copy on the Mac that created the setup: `new = uuid5(NAMESPACE_SCHRODECK, profile_id + ":" + deck_key + ":" + install_gen + ":" + original ActionID)`. `install_gen` is a per-(profile_id, deck_key) counter in local state, starting at 1 and incremented by every rejoin, so a re-created member never reuses the ids of an archived one. This costs nothing, because the normalized hash drops `ActionID` ([contract C](../contracts/profile-format.md) P9), and it means schrodeck **never** creates duplicate `ActionID`s on one Mac (a template and its first member copy, or two decks with the same setup). Whether the app tolerates duplicates (contract C P10) becomes informational, not a gate. Consequence: plugin instances get new ids on each install, which the app sees as new buttons. That is harmless because every install restarts the app anyway.
+- **Rejoin onto a deck that already holds a copy of the setup = archive** (review F50, owner's decision). This happens when the user rejoins a DETACHED copy onto the same device, or re-subscribes after an earlier `unmap`. Opting in and pointing the setup at that deck means "take the setup's current version under its canonical folder and name", but nothing is destroyed:
+  1. Inside the same two-phase apply (app quit, [0008](0008-two-phase-apply.md)), the existing copy is **moved** to a fresh folder UUID (random, recorded in local state as an *archive*), and its profile `Name` is changed to `<original name>-<YYYY-MM-DD-HHMM>` (local time; if that name is taken, `-2`, `-3`, …). Nothing else in it changes.
+  2. The rejoined member is installed in the canonical folder under the canonical name, with `install_gen + 1`.
+  3. The archive is an ordinary local profile from then on: never synced, never touched again by schrodeck.
+  4. It is **called out twice**: in the dry-run rundown before confirmation ("your current *schrodeck - 8x4 - Work* will be kept as *schrodeck - 8x4 - Work-2026-10-01-1742*") and in a notification afterwards ([0016](0016-notifications.md)).
+
+  Side effects stated in the rundown: if the archived copy was the deck's selected profile, the app will select another one after the restart, because schrodeck never writes the selected profile ([0019](0019-selected-profile-stays-per-host.md)); cross-profile references ([contract C](../contracts/profile-format.md) P8) that pointed at the old folder now point at the archive, and the rundown lists them as a warning.
+- **Canonical folder occupied** (review F57): if the canonical folder exists but local state can't account for it, and it can't be recovered from this host's own head, the copy is DETACHED(folder-conflict) ([0030](0030-fail-closed-detach.md)). Resolving it by rejoin archives the occupant as above.
 - **`deck_key`** is the key of the deck's entry in the app's prefs `Devices` dictionary ([R14](../references.md), observed; [contract A](../contracts/os-connector.md) `DeviceEnumerator.AppDeviceID`), not the manifest's `Device.UUID` (review F31). A deck can only be subscribed onto if its key is **unique** among this host's devices. Virtual decks are observed with the empty id `@(0)[]` ([R12](../references.md)): one virtual deck on a host is fine, but if two devices share a key, `subscribe` refuses to target either of them and says why, rather than letting two copies collide on one folder name.
 - **Where the mapping lives:**
   - local state, which is authoritative for this host;
@@ -25,11 +34,12 @@ Virtual decks need a physical deck seen within the last 30 days, or they go away
 
 - **Choosing a deck:** the user always picks the destination device explicitly ([0022](0022-onboarding-init-and-join.md)); `--deck` is required non-interactively when more than one local deck has a matching geometry. This also covers two same-size decks on one host: each setup goes where the user puts it. Join never auto-subscribes.
 - **One profile on two decks** on one host means two copies with two folders and two B values. They are applied in one batch ([0008](0008-two-phase-apply.md)).
-- **Deck loss:** if the deck a copy is bound to disappears from the app's device list (as opposed to being disconnected, which the app keeps listing, [R11](../references.md)), including a virtual deck that expired, that copy becomes **DETACHED(deck-gone)** ([0030](0030-fail-closed-detach.md)): nothing is pushed or pulled for it, one notification is sent, and it does **not** resume by itself if the deck reappears. `schrodeck resolve <setup>` offers rejoin (a new copy on another compatible device) or unmap.
+- **Deck loss:** if the deck a copy is bound to disappears from the app's device list (as opposed to being disconnected, which the app keeps listing, [R11](../references.md)), including a virtual deck that expired, that copy becomes **DETACHED(deck-gone)** ([0030](0030-fail-closed-detach.md)): nothing is pushed or pulled for it, one notification is sent, and it does **not** resume by itself if the deck reappears. `schrodeck resolve <setup>` offers rejoin (a new member copy on a compatible device; if that's the same device after it came back, the detached copy is archived first, as above) or unmap.
 
 ## Consequences
 
-- Good: renames, a lost local state, and two copies on one host all have defined behavior.
+- Good: renames, a lost local state, two copies on one host, and rejoining onto the same deck all have defined behavior, and none of them destroys a profile.
+- Bad: a rejoin leaves an archived profile on the deck that the user deletes by hand when they no longer want it.
 - Good: a subscriber's folder name reveals nothing about the deck. It is a hash, and no serial appears in it.
 - Good: one naming rule for every member copy on every host, so there's no special case for the host that created the setup. Folder names are excluded from hashes anyway ([contract C](../contracts/profile-format.md)).
 - Risk: whether the app tolerates a profile whose folder UUID it didn't create is **observed only through the round-trip probe** ([contract B](../contracts/client-os.md) M4), which must pass before M3 ships.
@@ -40,6 +50,9 @@ Virtual decks need a physical deck seen within the last 30 days, or they go away
 - **The creating host keeps the template's folder as its member copy** (the previous version): made the user's own profile a sync target. Replaced by a new member copy ([0029](0029-problem-statement-and-setup-model.md)).
 - **Identity by profile name:** breaks on rename and allows accidental opt-in ([0022](0022-onboarding-init-and-join.md)).
 - **Random folder UUIDs for subscribers:** the mapping can't be rebuilt if local state is lost.
+- **A generation counter in the folder name** (reviewer's suggestion for F50): avoids the collision, but leaves the old copy under the old canonical name, so two `schrodeck - 8x4 - Work` profiles sit on one deck. Rejected in favor of an explicit archive.
+- **Rejoin overwrites the old copy:** destroys whatever was in it. Rejected: archive instead.
+- **Copy `ActionID`s verbatim:** creates duplicates on the very first `init` (template and member on one deck), with unknown app behavior (P10). Rejected: always regenerate.
 
 ## Verified by
 
@@ -49,6 +62,9 @@ No check yet; to be written in the plan:
 - Subscribing one profile onto two decks ⇒ two distinct folders, one batched apply.
 - Removing a deck from the fake device list ⇒ DETACHED(deck-gone), no apply, one notification; restoring it ⇒ **still** DETACHED until `resolve` (known-bad: auto-resume must fail the test).
 - Two matching decks and no `--deck` ⇒ refuse.
+- **Rejoin onto the same deck** (detached copy present, or an earlier unmapped copy) ⇒ the old copy is moved to a new folder and renamed `<name>-<datestamp>` with its content otherwise byte-identical; the new member is in the canonical folder with the canonical name; the rundown and one notification both name the archive. Known-bad: an implementation that reuses or overwrites the old folder must fail (the old copy's bytes must still exist afterwards).
+- **ActionIDs:** after `init` on one Mac, the template and the member copy share **no** `ActionID`; two member copies of one setup on two decks of one Mac share none either; the normalized hashes of template (Name overridden) and member are equal. Known-bad: a verbatim copy must fail the first assertion.
+- Canonical folder occupied by an unaccounted profile ⇒ DETACHED(folder-conflict), no write.
 
 ## References
 
