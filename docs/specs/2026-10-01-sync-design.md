@@ -1,4 +1,4 @@
-# mac-streamdeck-sync — design
+# schrodeck — design
 
 Status: DRAFT for review (2026-10-01). No code exists yet.
 
@@ -47,18 +47,18 @@ Configuration has three layers. Each fact has exactly one home:
 | Layer | Where | Holds | Differs per host? |
 |---|---|---|---|
 | **Host identity** | derived at runtime, never stored as config | `host_id = sha256(IOPlatformUUID + ":" + username)[:12]` | yes, but computed |
-| **Local pointer** | `~/.config/mac-streamdeck-sync/config.toml` (optional) | `store = "<path>"`: where the shared directory is mounted *on this Mac* | yes: path only |
+| **Local pointer** | `~/.config/schrodeck/config.toml` (optional) | `store = "<path>"`: where the shared directory is mounted *on this Mac* | yes: path only |
 | **Common config** | `<store>/config.toml` | deck allowlist, `retention.local` (X) / `retention.shared` (Y) restore points per deck, script-replication map, `notify.level`, host registry (`host_id → friendly name`) | no: one copy, shared by all hosts |
 
 - **Why hardware + username:** `IOPlatformUUID` survives renames and OS reinstalls; `ComputerName`/hostname are user-editable and can collide. Stream Deck profiles are per macOS user, so two accounts on one Mac are two hosts. A new logic board or a new Mac gets a new `host_id` and starts as a clean FirstRun, which is safe by construction.
-- **Store discovery order:** `--store` flag → local pointer → Dropbox's `~/.dropbox/info.json` (`personal`/`business` path) + `/mac-streamdeck-sync` → iCloud Drive `~/Library/Mobile Documents/com~apple~CloudDocs/mac-streamdeck-sync`. More than one candidate containing a store `FORMAT` file → refuse and ask. Never guess between two stores.
+- **Store discovery order:** `--store` flag → local pointer → Dropbox's `~/.dropbox/info.json` (`personal`/`business` path) + `/schrodeck` → iCloud Drive `~/Library/Mobile Documents/com~apple~CloudDocs/schrodeck`. More than one candidate containing a store `FORMAT` file → refuse and ask. Never guess between two stores.
 - **The local pointer is the only per-host config**, and it holds a path, not settings. Anything else a user wants to set goes in the common config, so a change made on one Mac applies on all of them. The CLI's `sdsync config set` writes the common config with the same temp → verify → rename discipline as profile pushes.
 - **Hosts register themselves:** on first run a host adds its `host_id` (+ friendly name, default `ComputerName`) to the registry. Snapshots, inventory files and notifications name hosts by friendly name. Store paths use `host_id`.
 
 ```
 repo (public)                      per-Mac, never committed
-├── sdsync (Python CLI)            ~/.config/mac-streamdeck-sync/config.toml   (store path only, optional)
-├── launchd/ plist templates       ~/Library/Application Support/mac-streamdeck-sync/
+├── sdsync (Python CLI)            ~/.config/schrodeck/config.toml   (store path only, optional)
+├── launchd/ plist templates       ~/Library/Application Support/schrodeck/
 ├── install.sh                       state.json (B hashes per deck), logs, history/ (local restore points)
 └── docs/
 ```
@@ -68,7 +68,7 @@ The repo holds no host names, usernames, device serials or tokens. `install.sh` 
 ## Shared store layout
 
 ```
-<store>/                                  e.g. ~/Dropbox/mac-streamdeck-sync
+<store>/                                  e.g. ~/Dropbox/schrodeck
 ├── FORMAT                                store schema version (refuse unknown)
 ├── config.toml                           common config (see Architecture)
 ├── decks/<device-uuid-hash>/
@@ -145,7 +145,7 @@ Two independent rings of restore points per deck, sized separately in the common
 
 | Ring | Size key (default) | Where | Written | Survives |
 |---|---|---|---|---|
-| **Local** (X) | `retention.local` (20) | `~/Library/Application Support/mac-streamdeck-sync/history/<deck>/<ts>-<reason>/` | before every pull, rollback, and resolve, and after every push (the tree as published) | a corrupted or deleted shared store |
+| **Local** (X) | `retention.local` (20) | `~/Library/Application Support/schrodeck/history/<deck>/<ts>-<reason>/` | before every pull, rollback, and resolve, and after every push (the tree as published) | a corrupted or deleted shared store |
 | **Shared** (Y) | `retention.shared` (20) | `<store>/decks/<deck>/snapshots/<ts>-<host_id>/` | every push (every shared change), and both sides of every diverge | losing or replacing a Mac |
 
 - Both values live in the common config, so every Mac keeps the same X. A Mac that needs a different X (small disk, say) gets a host-keyed override **in the common config** (`[hosts.<host_id>] retention_local = 5`). That keeps one home per fact and leaves the local pointer as a path only.
@@ -161,7 +161,7 @@ Two independent rings of restore points per deck, sized separately in the common
 
 Every run logs; every **state change** is also recorded as an event.
 
-- **Local log:** `~/Library/Logs/mac-streamdeck-sync/sdsync.log`, so Console.app shows it under Log Reports. Format: `2026-10-01T12:30:05-0500 INFO  [deck 3f2a91] Behind -> Pull: R=9c1e… B=41d0… (trigger=attach)`. Levels: DEBUG (each step), INFO (decisions and transitions), WARN (held, in flight, missing script/plugin), ERROR (failure + the state it left things in). `SDSYNC_LOG_LEVEL` overrides; default INFO. Size-rotated, keeping 5 files.
+- **Local log:** `~/Library/Logs/schrodeck/sdsync.log`, so Console.app shows it under Log Reports. Format: `2026-10-01T12:30:05-0500 INFO  [deck 3f2a91] Behind -> Pull: R=9c1e… B=41d0… (trigger=attach)`. Levels: DEBUG (each step), INFO (decisions and transitions), WARN (held, in flight, missing script/plugin), ERROR (failure + the state it left things in). `SDSYNC_LOG_LEVEL` overrides; default INFO. Size-rotated, keeping 5 files.
 - **Event trail (shared):** `<store>/events/<host_id>.jsonl`, append-only, **one file per host** so two Macs never write the same file and Dropbox never makes a conflicted copy. Each line: `{ts, host_id, deck, from_state, to_state, action, hashes{L,R,B}, trigger, result}`. Rotated by count, the same as the log.
 - `sdsync log [--deck D] [--host H] [--since 1d]` merges all hosts' event files by timestamp into one timeline: *who pushed what, who pulled it, where it diverged*. Timestamps are for **display only**. No decision ever reads them, so clock skew between Macs can make the timeline look out of order but can never change behavior.
 - InSync ticks with no transition log at DEBUG only, so a 15-minute timer doesn't fill the log.

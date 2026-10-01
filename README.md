@@ -1,6 +1,8 @@
-# mac-streamdeck-sync
+# schrodeck
 
-Keep Elgato Stream Deck profiles in sync across several Macs that share the same deck(s), for example through a Thunderbolt or KVM switch, using nothing but a shared cloud folder (Dropbox, iCloud Drive, …).
+*Your Stream Deck profile is in superposition across every Mac it has been on, until you attach a deck and it collapses into the latest state.*
+
+Keep Elgato Stream Deck profiles in sync across several computers, including different physical decks of the same model, for example through a Thunderbolt or KVM switch, using nothing but a shared cloud folder (Dropbox, iCloud Drive, …).
 
 > **Status: design phase.** No working code yet. See the [design spec](docs/specs/2026-10-01-sync-design.md).
 
