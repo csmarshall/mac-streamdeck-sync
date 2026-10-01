@@ -73,8 +73,9 @@ Invariants: `Quit` must be **graceful**, so the app flushes its in-memory state 
 
 ```go
 type Deck struct {
-    AppDeviceID string // the app's own id (e.g. Device.UUID); local only
-    Geometry   Geometry // columns, rows, dials (from Elgato's DeviceType table [R8](../references.md))
+    AppDeviceID      string   // key of this deck in the app's prefs device list; local only; the deck_key of ADR 0026
+    ManifestDeviceID string   // the Device.UUID value the app writes into profiles bound to this deck; what {{DEVICE}} expands to (ADR 0006)
+    Geometry         Geometry // columns, rows, dials (from Elgato's DeviceType table [R8](../references.md))
     Model      string
     Virtual    bool
     SerialHash string // optional, informational (ADR 0003); "" if unknown
@@ -82,6 +83,8 @@ type Deck struct {
 type DeviceEnumerator interface { Decks() ([]Deck, error) }
 ```
 Source: the app's own device list (prefs + manifests), not USB. Same on every OS in principle, but the prefs **format** differs (see `AppPrefs`).
+
+Invariants: the adapter returns every deck, even when two share an `AppDeviceID` (e.g. two virtual decks with the empty id). The core then refuses to target either of them (ADR [0026](../adr/0026-profile-identity.md), review F31). Whether `AppDeviceID` and `ManifestDeviceID` are always the same string is **unverified** (they have the same shape on one Mac); the adapter must return both, and the round-trip probe ([contract B](client-os.md) M4) checks that an installed profile is bound to the intended deck.
 
 ### 5. `AppPrefs`: app version and per-deck selected profile (read-only)
 

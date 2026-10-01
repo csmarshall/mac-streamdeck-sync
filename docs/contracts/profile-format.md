@@ -12,7 +12,7 @@ Index of all contracts: [README.md](README.md).
 |---|---|---|---|
 | P1 | Profiles live in `ProfilesV3/<UUID>.sdProfile/` with a top-level `manifest.json` and per-page `Profiles/<page>/manifest.json` + `Images/` | observed [R2](../references.md) | the structural key fingerprint and the set of file-name patterns match the recorded ones |
 | P2 | The top-level manifest has `"Version": "3.0"` | observed | read and compare |
-| P3 | Top-level `Device.UUID` binds the profile to one deck; `Device.Model` gives the model | observed [R9](../references.md) | present on every profile |
+| P3 | Top-level `Device.UUID` binds the profile to one deck; `Device.Model` gives the model. It embeds the deck's USB serial, so schrodeck stores it only as the `{{DEVICE}}` placeholder ([contract D](store-format.md)) | observed [R9](../references.md) | present on every profile |
 | P4 | Runtime-only fields: action `State`, `Pages.Current`; the app rewrites top-level manifests on launch | observed [R15](../references.md) | **launch-rewrite probe** (M3, because it restarts the app): hash every profile (normalized) → quit → relaunch → settle → re-hash. Normalized hashes must be equal. Any new differing field fails the probe and is reported by key path. |
 | P5 | Action settings are plain JSON inside the page manifest; global plugin settings are not in profiles | documented [R7](../references.md) | none needed (documented) |
 | P6 | `Open` actions store absolute paths in `Settings.path` | observed [R16](../references.md) | report any absolute path outside `{{HOME}}` |
@@ -39,7 +39,7 @@ Known junk is **ignored silently** for hashing and copying: `.DS_Store`, sync-cl
    - remove the strip-list fields (action `State`, `Pages.Current`, top-level `Device.UUID`), which are one named constant in the code;
    - **canonicalize it with RFC 8785 (JSON Canonicalization Scheme)**.
 
-   A stored tree is already in placeholder form. A local copy is first put into placeholder form (ADR 0006).
+   A stored tree is already in placeholder form (variables and `{{DEVICE}}`). A local copy is first put into placeholder form (ADR 0006).
 3. For each image, use the raw bytes.
 4. `hash = sha256` over the lines `<path>\0<sha256(canonical bytes)>\n`, sorted bytewise by path.
 

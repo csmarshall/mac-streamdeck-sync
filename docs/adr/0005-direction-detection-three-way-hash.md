@@ -1,6 +1,6 @@
 # 0005. Direction is decided by normalized hashes and a commit graph, never by clocks
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F1, F4): R now comes from per-host heads over an immutable commit graph, not from one shared `current.json`.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F1, F4): R now comes from per-host heads over an immutable commit graph, not from one shared `current.json`. Revised 2026-10-01 (review round 2: F27, F28, F30, F32, F34, F38): freshness is checked first; equal-hash tips are converged; R ignores heads below this host's `norm_version`; Anomaly and HoldLocal states; B is recoverable from this host's own head.
 
 ## Context
 
@@ -20,31 +20,36 @@ The store keeps an immutable **commit graph** per shared profile. Each host owns
 
 ```
 L = hash(normalize(local copy))                      contract C § normalized hash
-R = the maximal commit all live heads descend from   contract D § deriving R
+R = the commit that subsumes every live head         contract D § deriving R
     (undefined while InFlight or Forked)
 B = (commit_id, local_hash) this host last synced    local state, per copy
 ```
+
+Two commits are **equivalent** (≡) if they are the same commit or have the same `hash` under the same `norm_version`. Every comparison of commits below uses ≡, so two hosts that independently make the same edit are converged, not forked (owner's decision, review F27). The full rules for R (equivalence, subsumption, the `norm_version` filter, the deterministic choice among equivalent tips) are defined once, in [contract D § deriving R](../contracts/store-format.md#deriving-r-from-the-heads).
 
 Normally `B.local_hash` equals the hash of `B.commit`. They differ only after an apply kept under `on_verify_failure = keep` (ADR [0008](0008-two-phase-apply.md)).
 
 | Condition (checked in this order) | State | Action |
 |---|---|---|
-| tombstone present | Unshared | detach, notify once ([0025](0025-deletion-and-unshare.md)) |
-| no heads, B present, no tombstone | StoreLost | stop, notify; never resurrect, never wipe ([0025](0025-deletion-and-unshare.md)) |
+| the provider does not report the profile's store files as current, or a referenced commit, or R's tree, is missing or invalid | InFlight | nothing this tick; alarm if stuck ([0023](0023-store-freshness-via-file-provider.md)). Checked **first**, so a not-yet-delivered store is never mistaken for a deleted one (review F30) |
+| an unsuperseded tombstone record exists | Unshared | detach, notify once ([0025](0025-deletion-and-unshare.md)) |
+| store reported fresh, no heads, B present, no tombstone (persisting across runs, see [0025](0025-deletion-and-unshare.md)) | StoreLost | stop, notify; never resurrect, never wipe. Clears by itself when heads reappear |
 | local copy missing, B present | LocalDeleted | stop for this copy, notify; never propagate ([0025](0025-deletion-and-unshare.md)) |
-| a referenced commit or tree is missing or invalid, or the provider says not `current` | InFlight | nothing this tick; alarm if stuck ([0023](0023-store-freshness-via-file-provider.md)) |
-| `norm_version` of R (or of any head) ≠ this host's | VersionMismatch | read-only for this profile; notify once ([0027](0027-store-lifecycle.md)) |
-| heads are not ancestry-ordered (no R) | Forked | push this host's unpushed local edit, if any, as its own commit so it is preserved; then wait for `resolve` ([0007](0007-conflict-policy.md)) |
-| L == hash(R) | InSync | B := (R, L) |
-| L == B.local_hash, R ≠ B.commit | Behind | apply ([0008](0008-two-phase-apply.md)), unless this host has BLOCKED(R) |
-| L ≠ B.local_hash, R == B.commit | Ahead | push a commit whose parent is B.commit ([0009](0009-store-write-protocol.md)); who may push: [0021](0021-who-may-push.md) |
-| L ≠ B.local_hash, R ≠ B.commit | Diverged | push the local edit as a commit with parent B.commit (the store now shows a fork), notify, wait for `resolve` ([0007](0007-conflict-policy.md)) |
+| this host's `norm_version` is older than R's, or the store `FORMAT` is newer than this host's | VersionMismatch | read-only for this profile; notify once ([0027](0027-store-lifecycle.md)). Heads at an **older** `norm_version` than this host's don't trigger this: they are ignored for R (review F28) |
+| live heads don't converge (no R) | Forked | push this host's unpushed local edit, if any, as its own commit so it is preserved; then wait for `resolve` ([0007](0007-conflict-policy.md)) |
+| R does not subsume `B.commit` | Anomaly | stop, notify once; never read as Behind (the store went backwards: own head lost or a provider restore) (review F34) |
+| L == hash(R) | InSync | B := (R, L), after moving this host's head to R if it isn't already ≡ R |
+| L == B.local_hash, R ≢ B.commit | Behind | apply ([0008](0008-two-phase-apply.md)), unless this host has BLOCKED(R) or the incoming fingerprint is unknown here |
+| L ≠ B.local_hash, R ≡ B.commit | Ahead | push a commit whose parent is R ([0009](0009-store-write-protocol.md)); who may push: [0021](0021-who-may-push.md) |
+| L ≠ B.local_hash, R ≢ B.commit, and this host is BLOCKED(R) or refuses R's fingerprint | HoldLocal | **don't push** (a push would fork the whole group over one incompatible host); notify once, deduplicated: "this Mac can't take version X of *<profile>*, so your edit is local only" (owner's decision, review F32). It re-evaluates when R changes, the block is cleared, or the fingerprint becomes known |
+| L ≠ B.local_hash, R ≢ B.commit | Diverged | push the local edit as a commit with parent B.commit (the store now shows a fork), notify, wait for `resolve` ([0007](0007-conflict-policy.md)) |
 | no B; this host is sharing the profile and there are no heads | FirstShare | push the root commit |
+| no B; this host's own head exists | Recover | B := (own head's commit, its hash); then re-evaluate. A host that lost its local state rebuilds B from the head it wrote (review F38), so it sees InSync or Ahead, not a spurious Diverged |
 | no B; a `subscribe` is pending | Install | apply R as a new copy ([0026](0026-profile-identity.md)) |
 
 ![sync state diagram](../sync-states.png)
 
-**Concurrent pushes are now detectable.** Two hosts Ahead from the same B write two commits with the same parent and different hashes. Their heads are not ancestry-ordered, so every host sees Forked on its next read. Nothing is overwritten, because no store file has two writers.
+**Concurrent pushes are now detectable.** Two hosts Ahead from the same B write two commits with the same parent and different hashes. Their heads don't converge, so every host sees Forked on its next read. Nothing is overwritten, because no store file has two writers. If the two edits happen to be identical, the commits are equivalent and nobody is asked anything.
 
 **No decision ever reads a file mtime or a wall-clock timestamp.**
 
@@ -58,8 +63,8 @@ Commits and heads carry `updated_at` (UTC) and `updated_by` ([contract D](../con
 - Good: any number of hosts, with no coordination and no membership. A retired host's head is just an old ancestor.
 - Good: immune to clock skew and the app's own rewrites, provided normalization is right.
 - Bad: correctness still rests on normalization ([0006](0006-normalization-and-variables.md)). A missed runtime field makes every launch look like an edit. That is contained by the launch-rewrite tests and apply backoff ([0012](0012-triggers.md)).
-- Bad: finding R means walking ancestry through commit files. That's cheap, because histories are short and GC bounds them ([0027](0027-store-lifecycle.md)), but it is more logic than comparing one hash.
-- Risk: if B is lost (local state deleted), the host can't tell its own edits from remote ones. Every such copy whose L differs from R becomes Diverged (safe, noisy) until resolved.
+- Bad: finding R means walking ancestry through commit files. Commits are never garbage-collected ([0027](0027-store-lifecycle.md)), so the walk always completes. Commits are a few hundred bytes each, so even years of history stay cheap, but it is more logic than comparing one hash.
+- Risk: if B is lost (local state deleted), the host recovers it from its own head (the Recover row). Only if the head is also gone does it fall back to treating every differing copy as Diverged (safe, noisy).
 
 ## Alternatives considered
 
@@ -73,7 +78,11 @@ Commits and heads carry `updated_at` (UTC) and `updated_by` ([contract D](../con
 No check yet; to be written in the plan:
 - A table-driven test covering every row above, including known-bad cases: a launch-only rewrite must yield InSync, and the same fixture with normalization disabled must yield Ahead.
 - A two-host concurrent-push simulation against a shared fake store. Both hosts are Ahead from the same B and both push ⇒ both report Forked, neither local copy is modified, and both commits exist. **Known-bad:** the same simulation against a last-writer-wins store must lose an edit, so the test is seen to fail against the old design.
-- An InFlight test: a head whose tree is incomplete ⇒ no apply.
+- An InFlight test: a head whose tree is incomplete ⇒ no apply. A store not yet enumerated by the provider (freshness not current, no heads visible) ⇒ InFlight, never StoreLost.
+- Equivalence: two hosts make the identical edit from the same parent ⇒ both InSync, no Forked, no notification. Known-bad: with equivalence disabled, the same test must report Forked.
+- HoldLocal: a BLOCKED host edits the profile ⇒ no push, one notification over 10 runs, and the other hosts see no fork.
+- Anomaly: this host's head reverted to an ancestor ⇒ Anomaly, no apply.
+- Recover: delete local state on a host whose head exists ⇒ InSync on the next run, no Diverged.
 
 ## References
 

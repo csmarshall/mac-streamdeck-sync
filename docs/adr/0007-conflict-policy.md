@@ -14,9 +14,10 @@ Profiles are nested JSON with images and positional keys, so there is no meaning
 ## Decision
 
 - **Preserve both sides in the store.** A Diverged host pushes its local edit as a commit whose parent is its B. That turns a local divergence into a visible fork, so no edit exists only on one machine. Commits and trees are immutable, so both versions are kept automatically.
+- **Equal edits are not a conflict.** If the tips have the same normalized `hash` under the same `norm_version`, they are converged ([contract D § deriving R](../contracts/store-format.md#deriving-r-from-the-heads)), so nobody is notified or asked (owner's decision, review F27).
 - **Touch no app files** on any host while the profile is Forked. Hosts that didn't edit (L == B) do not apply either side. They report "forked, waiting for resolve".
 - **Notify, deduplicated** ([0016](0016-notifications.md)): one notification per (fork, profile, set of tips) per host, persistent until resolved.
-- **`schrodeck resolve <profile> --keep <commit>|local|<history-id>`** on any host writes a `resolve` commit:
+- **`schrodeck resolve <profile> --keep <commit>|local|<history-id>`** on any host writes a `resolve` commit (the same command also clears BLOCKED, and `--push-post-apply` publishes a tree kept after a failed verify, [0008](0008-two-phase-apply.md)):
   - its **parents are every current tip**;
   - its content is the chosen version.
 
@@ -39,7 +40,7 @@ Profiles are nested JSON with images and positional keys, so there is no meaning
 No check yet; to be written in the plan:
 - Both sides change ⇒ no app file is opened for writing on either host (asserted at the filesystem-port level), both commits exist, and both hosts report Forked.
 - A third, uninvolved host ⇒ Forked, no apply.
-- `resolve --keep local` on host A ⇒ a commit with both tips as parents; host B goes Behind and applies it; all heads become ancestry-ordered.
+- `resolve --keep local` on host A ⇒ a commit with both tips as parents; host B goes Behind and applies it; all heads converge on the resolve commit.
 
 ## References
 

@@ -12,7 +12,7 @@ A sync group starts on one host and grows. Joining must never surprise anyone. T
 
 1. Preflight: the Stream Deck app is installed and its config is readable (profiles directory, prefs, an app version that passes the schema guard, ADR [0015](0015-schema-guard.md)). If not, fail with a plain message saying what is missing. Never create a half-configured store.
 2. Choose the shared directory. schrodeck suggests candidates (Dropbox, then iCloud Drive, ADR [0010](0010-host-identity-and-config-layering.md)). It writes `FORMAT`, the common config and this host's `hosts/<host_id>.toml`.
-3. Choose the profile(s) to share (ADR [0004](0004-shared-profiles-and-subscriptions.md)). Each gets a `profile_id` (ADR [0026](0026-profile-identity.md)). The first push follows.
+3. Choose the profile(s) to share (ADR [0004](0004-shared-profiles-and-subscriptions.md)). Each gets a `profile_id` (ADR [0026](0026-profile-identity.md)). The first push follows. Only after it succeeds, and from M4 on, the background agent (ADR [0012](0012-triggers.md)) is installed. The package never installs it ([0028](0028-distribution-brew-tap-and-pkg.md)).
 4. **Naming suggestion** (from milestone M3, because renaming writes a manifest and goes through the two-phase apply, ADR [0008](0008-two-phase-apply.md)): offer to rename each shared profile to `schrodeck · <name> · <cols>×<rows>` (e.g. `schrodeck · Work · 8×4`), so the Stream Deck app shows at a glance which profiles are synced and for which geometry. It is a suggestion only. Identity is the `profile_id`, so a later rename is an ordinary synced edit.
 
 **`schrodeck join <dir>`** on each additional host (M3):

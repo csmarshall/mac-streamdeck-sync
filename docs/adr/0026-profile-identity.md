@@ -1,6 +1,6 @@
 # 0026. Profile identity: a schrodeck `profile_id`, mapped to local folders per host
 
-Status: Accepted 2026-10-01 (review F16)
+Status: Accepted 2026-10-01 (review F16). Revised 2026-10-01 (review round 2: F31, F38): the deck key is the app's prefs device key and must be unique on the host; a lost local state is rebuilt from this host's own head.
 
 ## Context
 
@@ -16,7 +16,8 @@ Virtual decks need a physical deck seen within the last 30 days, or they go away
 
 - **`profile_id`** is a random UUIDv4 assigned by `share`, recorded in the write-once `profiles/<profile_id>/profile.json` ([contract D](../contracts/store-format.md)). It never changes. A profile's display name is just content, so renames sync as ordinary edits.
 - **The sharing host keeps its original folder.** Its local state maps `local folder UUID → (profile_id, deck)`.
-- **Subscribers** install into a new folder named `uuid5(NAMESPACE_SCHRODECK, profile_id + ":" + deck.AppDeviceID)`. The name is deterministic, so a host that loses its local state can rebuild the mapping by recomputing the names. A subscribed copy never reuses an existing local folder.
+- **Subscribers** install into a new folder named `uuid5(NAMESPACE_SCHRODECK, profile_id + ":" + deck_key)`. The name is deterministic, so a host that loses its local state can rebuild the mapping by recomputing the names. A subscribed copy never reuses an existing local folder.
+- **`deck_key`** is the key of the deck's entry in the app's prefs `Devices` dictionary ([R14](../references.md), observed; [contract A](../contracts/os-connector.md) `DeviceEnumerator.AppDeviceID`), not the manifest's `Device.UUID` (review F31). A deck can only be subscribed onto if its key is **unique** among this host's devices. Virtual decks are observed with the empty id `@(0)[]` ([R12](../references.md)): one virtual deck on a host is fine, but if two devices share a key, `subscribe` refuses to target either of them and says why, rather than letting two copies collide on one folder name.
 - **Where the mapping lives:**
   - local state, which is authoritative for this host;
   - `hosts/<host_id>.toml`'s subscriptions (`profile_id → deck`), which `status` on other hosts can display.
@@ -45,7 +46,8 @@ Virtual decks need a physical deck seen within the last 30 days, or they go away
 ## Verified by
 
 No check yet; to be written in the plan:
-- Deleting local state and re-running ⇒ the same folder ↔ profile mapping is rebuilt, with no Diverged on the sharing host or on subscribers.
+- Deleting local state and re-running ⇒ the same folder ↔ profile mapping is rebuilt, and B is recovered from this host's own head ([0005](0005-direction-detection-three-way-hash.md) Recover row), with no Diverged on the sharing host or on subscribers. Known-bad: without head-based recovery, the same test reports Diverged.
+- Two devices with the same prefs key (e.g. two virtual decks) ⇒ `subscribe` refuses both, no install.
 - Subscribing one profile onto two decks ⇒ two distinct folders, one batched apply.
 - Removing a deck from the fake device list ⇒ DeckGone, no apply, one notification; restoring it ⇒ resumes.
 - Two matching decks and no `--deck` ⇒ refuse.

@@ -24,4 +24,4 @@ Not yet researched or verified. A Windows connector starts by writing this secti
 |---|---|---|---|---|---|
 | macOS 27 | 7.5.1 | 3.0 | *(recorded by the first `doctor` run)* | M1, M2, M5 observed by hand; P4/M3/M4 **not yet run** (no code) | 2026-10-01 |
 
-A row is added only by a passing `doctor` run. Hand observations are listed as such, never as "passed".
+A row is added only by a passing `doctor` run. Hand observations are listed as such, never as "passed". An app update whose read-only fingerprint check found the profile format unchanged is listed as "fingerprint unchanged" (enough to keep pushing, ADR [0015](../adr/0015-schema-guard.md)); the restart probes still have to pass before it counts as fully verified.

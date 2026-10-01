@@ -20,5 +20,5 @@ stateDiagram-v2
     Reevaluate --> Notify: relaunch app, the edit is<br/>Ahead or Diverged next tick
     Abort --> Notify: nothing touched, app state restored
     Verify --> Done: re-hash L == R for every target
-    Done --> [*]: journal cleared, B and head := R
+    Done --> [*]: journal cleared, head then B := R
     Notify --> [*]: journal cleared, logged, deduplicated

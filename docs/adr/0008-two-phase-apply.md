@@ -8,6 +8,11 @@ Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F1
 - the app's running state is restored;
 - batched runs.
 
+Revised 2026-10-01 (review round 2: F11, F33, F34):
+- crash recovery always restores the app's running state;
+- a verify failure that may be a settle-window edit says so, and `resolve` can publish the post-apply tree;
+- B is set only after the head write.
+
 ## Context
 
 Applying an update means replacing files of a running app. The app keeps state in memory and writes it back, so files changed under it get overwritten. Elgato says to close the app before changing its files ([R3](../references.md), documented). Elgato offers no CLI or URL to import or restart ([R17](../references.md)). Smart Profiles are deactivated while the Stream Deck window is open ([R13](../references.md)).
@@ -42,22 +47,24 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
 5. **Snapshot** (after the quit, so it includes any flushed state): copy each target's current local tree into the local history ring and verify it. `step = snapshotted`.
 6. **Swap** with atomic renames on the same volume: rename the old folder aside, then the staged one in. `step = swapped`.
 7. **Relaunch** if `app_was_running` (or if the user's setting says to always run it), then wait for it to settle (process up, files quiet). If the relaunch fails, retry once, then notify persistently. The files are already in place, and the app will load them when next opened.
-8. **Verify:** re-hash every target. If L == hash(R), set B := (R, L) and move the head to R ([contract D](../contracts/store-format.md)). Clear the journal.
+8. **Verify:** re-hash every target. If L == hash(R), move this host's head to R ([contract D](../contracts/store-format.md)); **only after that write succeeds**, set B := (R, L) (review F34). Clear the journal. If the head write fails, B is left unchanged and the next run re-evaluates: the copy is now InSync by hash and the head is retried.
 9. **On verify failure,** log the expected and actual hashes and the differing key paths, then follow `apply.on_verify_failure`:
    - **`rollback` (default):**
      1. Snapshot the failed post-apply tree first, for diagnosis.
      2. Restore the step-5 snapshot of **every** target in the run, through quit / swap / relaunch.
      3. Set a durable **BLOCKED(R)** in local state for that profile.
-     4. Notify, deduplicated: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification. See `schrodeck status <profile>`."
+     4. Notify, deduplicated: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification. If you edited this profile while Stream Deck was restarting, your edit is saved in history. See `schrodeck status <profile>`."
+
+     A verify failure can't always be told apart from a user edit made during the relaunch-and-settle window (review F33): both show up as L ≠ hash(R). So the post-apply tree saved in sub-step 1 is a first-class history entry, and `schrodeck resolve <profile> --push-post-apply` publishes it as an ordinary edit commit (parent R), which also clears BLOCKED(R). `status` shows the key paths that differed, so the user can tell an app repair from their own change.
 
      While BLOCKED(R), the profile isn't applied again until R changes (a new commit) or the user runs `schrodeck resolve`/`schrodeck unblock`. It is not retried on a timer.
    - **`keep`:** leave the applied files in place, set B := (R, L_actual), and flag the copy "applied, unverified". Because `B.local_hash` is the observed hash, the copy is neither Ahead (the app's repair isn't pushed) nor Behind (no re-apply loop). It is reported in `status` and notified once.
 
 **Crash recovery** (a journal exists at the start of a run). The rule depends on the recorded step, and recovery always goes through Quit and Verify:
-- `planned`: discard the staging, and leave the app as it is.
-- `snapshotted`: discard the staging. The originals are untouched.
+- `planned` or `snapshotted`: discard the staging. The originals are untouched. Then **restore the app's running state** from `app_was_running`: if the app was running before the apply and isn't now (the crash may have happened after step 3's quit), relaunch it (review F11).
 - `swapped` or later: roll forward. Quit, make sure every target's staged-in tree is present (finishing any rename that was half done), relaunch, then verify as in step 8.
 - If the app was relaunched by the user or at login before recovery runs, recovery quits it first (step 3) and proceeds.
+- Every recovery path ends with the app in its pre-apply running state. An apply never leaves a deck dead.
 
 The selected profile per deck is never touched ([0019](0019-selected-profile-stays-per-host.md)).
 
@@ -86,6 +93,9 @@ No check yet; to be written in the plan:
 - **Post-quit edit:** a fake app that modifies a target during Quit ⇒ the swap is aborted, and the copy is Ahead on the next tick. Known-bad: with the re-check disabled, the same test must lose the edit.
 - **Verify failure:** a fake app that rewrites a field on launch ⇒ one rollback, BLOCKED(R) set, exactly one notification across 10 subsequent runs, and zero further applies until R changes.
 - Two copies of one profile on one host ⇒ one quit/relaunch.
+- Crash after the quit but before the swap (journal at `planned` or `snapshotted`, app not running, `app_was_running = true`) ⇒ recovery relaunches the app, and the originals are untouched. Known-bad: recovery that only discards the staging leaves the app stopped and must fail this test.
+- Settle-window edit: a fake user edit during settle ⇒ BLOCKED, the notification mentions the possible edit, and `resolve --push-post-apply` publishes it and clears BLOCKED.
+- Head-write failure after a successful verify ⇒ B unchanged; the next run moves the head and sets B, with no second apply.
 
 ## References
 

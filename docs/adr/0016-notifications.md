@@ -31,12 +31,17 @@ The agent re-evaluates every profile on every run (watcher events and a 15-minut
 | Apply / push / rollback done | on | per commit |
 | New shared profile available | on | per profile |
 | Diverged / Forked | on, persistent | (fork, profile, tip set) |
-| BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification" + how to inspect | on, persistent | (blocked, profile, commit) |
+| BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification", noting that an edit made during the restart is saved in history, + how to inspect ([0008](0008-two-phase-apply.md)) | on, persistent | (blocked, profile, commit) |
+| HoldLocal: "this Mac can't take version X of *<profile>*, so your edit is local only" ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (holdlocal, profile, R commit) |
+| Incoming commit in a profile format this Mac hasn't verified ([0015](0015-schema-guard.md)) | on, persistent | (fingerprint, profile, fingerprint) |
+| Anomaly: the store went backwards for *<profile>* ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (anomaly, profile, R commit) |
 | Push refused: another host's value found in the profile (collision guard, [0006](0006-normalization-and-variables.md)) | on, persistent | (collision, profile, local hash) |
 | Applied but unverified (`keep`) | on | (kept, profile, commit) |
 | Backoff engaged | on (`notify.on_backoff`) | (backoff, profile) |
 | Missing plugin / script / Shortcut | on | (missing, profile, dependency) |
 | Unshared, store lost, local copy deleted, deck gone | on, persistent | (condition, profile) |
+| Reshared: subscriptions on this Mac resumed ([0025](0025-deletion-and-unshare.md)) | on | (reshare, profile, record) |
+| Deck not uniquely identifiable, subscription refused ([0026](0026-profile-identity.md)) | on | (deckkey, profile, deck key hash) |
 | Stuck in flight beyond the alarm threshold | on | (inflight, profile, head set) |
 | Version mismatch, upgrade needed | on, persistent | (version, store FORMAT) |
 | Held profile skipped | once per hold | (hold, profile) |

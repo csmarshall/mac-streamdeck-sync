@@ -1,6 +1,6 @@
 # 0006. Normalization (for hashing only) and per-host variables
 
-Status: Accepted 2026-10-01 (variables in v1). Revised 2026-10-01 (review F3, F4, F8, F9): the store holds full trees; normalization is used only for hashing; substitution is path-boundary-aware; `norm_version` added; variable changes never push.
+Status: Accepted 2026-10-01 (variables in v1). Revised 2026-10-01 (review F3, F4, F8, F9): the store holds full trees; normalization is used only for hashing; substitution is path-boundary-aware; `norm_version` added; variable changes never push. Revised 2026-10-01 (review round 2: F3, F27, F29): a wider boundary set, `Device.UUID` stored as `{{DEVICE}}`, and re-materialization checks for unpushed edits under the old values first.
 
 ## Context
 
@@ -19,20 +19,25 @@ Some fields change at runtime with no edit: action `State` and `Pages.Current` (
 | Form | Where | Contents |
 |---|---|---|
 | Local copy | the app's `ProfilesV3` | exactly what the app wrote, with this host's literal values |
-| Stored tree | `trees/<digest>/` in the store ([contract D](../contracts/store-format.md)) | the **full** tree as the app wrote it, with only variable values replaced by placeholders. Runtime fields are kept. |
+| Stored tree | `trees/<digest>/<host_id>/` in the store ([contract D](../contracts/store-format.md)) | the **full** tree as the app wrote it, with variable values replaced by placeholders and every `Device.UUID` value replaced by the reserved `{{DEVICE}}`. Runtime fields are kept. No raw device id (which embeds the deck's USB serial, [R9](../references.md)) ever reaches the store. |
 | Normalized form | in memory only | the stored form minus the strip list, JCS-canonicalized; used **only** to compute `hash` |
 
-- **Install** = take the stored tree, expand placeholders with this host's values, set `Device.UUID` to the receiving deck, and name the folder per [0026](0026-profile-identity.md). That is close to a byte-copy, so we depend as little as possible on the app tolerating fields we invented.
+- **Install** = take the stored tree, expand placeholders with this host's values, expand `{{DEVICE}}` to the receiving deck's id, and name the folder per [0026](0026-profile-identity.md). That is close to a byte-copy, so we depend as little as possible on the app tolerating fields we invented.
 - **The exact hash definition and the file allow-list live in [contract C § normalized hash](../contracts/profile-format.md#normalized-hash).** The strip list is one named constant there.
 - **`norm_version`:** every commit records the normalization version it was hashed under. Hashes are compared only under the same `norm_version`. Changing normalization means a `FORMAT` migration ([0027](0027-store-lifecycle.md)): B is re-based without pushing, and hosts on an older version go read-only instead of looping.
 
 **Variables (v1):**
 
 - The built-in `{{HOME}}`, plus user-defined variables (e.g. `{{HA_URL}}`). Their names and defaults are declared in the common config; each host's values live in its own `hosts/<host_id>.toml` ([0010](0010-host-identity-and-config-layering.md)).
-- **Path-boundary-aware substitution.** A value is replaced only where it is followed by end-of-string or a boundary character (`/`, `\`, `?`, `#`, `"`, whitespace). `/Users/<al>` therefore never matches inside `/Users/<alice>`. Longer values are matched first.
+- **Boundary-aware substitution.** A value is replaced only where it is preceded by start-of-string or a boundary character, and followed by end-of-string or a boundary character. The boundary set is `/` `\` `?` `#` `"` `'` `:` `,` `)` `]` `}` `(` `[` `{` `=` `&` `;` `@` and whitespace. `/Users/<al>` therefore never matches inside `/Users/<alice>`, while `https://ha.lan` *is* substituted inside `https://ha.lan:8123/api` (review F3: the first boundary set lacked `:`, so URLs with ports were never substituted). Longer values are matched first.
 - **Escaping.** A literal `{{` in profile content is stored as the reserved placeholder `{{_}}` and expanded back on install, so user text can never be mistaken for a placeholder.
 - **Collision guard.** Before pushing, scan the local copy for a literal that equals **another** registered host's value of any variable (path-boundary-aware). An example is the other Mac's `/Users/<other>/…` home path. If one is found, **refuse the push** for that profile and notify, naming the button. That literal would be wrong on that host, and pushing it would bake one machine's value into everyone's copy. `schrodeck inventory` lists the offending buttons.
-- **A variable-value change never pushes.** Each copy's local state records the variable values it was last materialized with. If this host's values change, the next run **re-materializes** the copy by re-installing B's stored tree with the new values through the normal apply ([0008](0008-two-phase-apply.md)). It doesn't push, and B doesn't change. Otherwise old literals would look like an edit and be pushed as literals (review scenario 3).
+- **A variable-value change never pushes by itself.** Each copy's local state records the variable values it was last materialized with (`vars_used`). When this host's values change, the next run:
+  1. computes L **under `vars_used`** (the old values), so the old literals canonicalize to placeholders exactly as before;
+  2. if that L ≠ B.local_hash, the copy has an unpushed edit: **push it first** (canonicalized under the old values), so the edit is never overwritten (review F29);
+  3. then **re-materializes** the copy: re-installs the stored tree of the (now current) B commit with the new values, through the normal two-phase apply ([0008](0008-two-phase-apply.md)), and records the new `vars_used`.
+
+  B's tree is **pinned** against GC while a re-materialization is pending ([contract D § garbage collection](../contracts/store-format.md#garbage-collection-trees-only)). Without step 1, old literals would look like an edit and be pushed as literals (review scenario 3).
 
 ## Consequences
 
@@ -58,6 +63,9 @@ No check yet; to be written in the plan:
   - a literal `{{` in a button title;
   - another host's home path baked into a button, which must refuse the push;
   - a variable value change, which must re-materialize, not push;
+  - a variable value change **with an unpushed edit** on the copy, which must push the edit first and then re-materialize, losing nothing (known-bad: re-materializing first must lose the edit);
+  - a URL with a port (`https://ha.lan:8123/x` with `HA_URL = https://ha.lan`), which must substitute;
+  - a stored tree, which must contain `{{DEVICE}}` and no `@(` device id;
   - a value appearing mid-word, which must not be substituted.
 - A cross-host round trip using **two distinct host configs**: expand on host A, edit nothing, canonicalize on host B ⇒ the same hash as the stored tree.
 

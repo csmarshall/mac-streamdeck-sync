@@ -1,22 +1,25 @@
 stateDiagram-v2
     direction TB
-    [*] --> Read: trigger (watcher / timer / CLI / attach)
-    Read --> Gate: for each subscribed copy<br/>read heads, commits, trees<br/>L = hash(local), B = last synced
-    Gate --> Stopped: tombstone, store lost, local deleted,<br/>deck gone, version mismatch, held
-    Gate --> InFlight: commit or tree missing,<br/>or provider not current
-    Gate --> Forked: heads not ancestry-ordered
-    Gate --> Compare: R = the tip all heads descend from
+    [*] --> Fresh: trigger (watcher / timer / CLI / attach)
+    Fresh --> InFlight: provider not current, or a commit<br/>or the tip tree is missing
+    Fresh --> Read: store files current
+    Read --> Gate: for each subscribed copy<br/>R from live heads (equal hash = converged)<br/>L = hash(local), B = last synced
+    Gate --> Stopped: unshared, store lost, local deleted,<br/>deck gone, version mismatch, held, anomaly
+    Gate --> Forked: live heads don't converge
+    Gate --> Compare: R subsumes every live head and B
     Compare --> InSync: L == R
-    Compare --> Behind: L == B, R != B
-    Compare --> Ahead: L != B, R == B
-    Compare --> Diverged: L != B, R != B
+    Compare --> Behind: L == B, R not equivalent to B
+    Compare --> Ahead: L != B, R equivalent to B
+    Compare --> HoldLocal: L != B, R not equivalent to B,<br/>this host BLOCKED or fingerprint unknown
+    Compare --> Diverged: L != B, R not equivalent to B
     Diverged --> Forked: push local edit as its own commit
     Behind --> Apply: two-phase apply (ADR 0008)
-    Ahead --> Push: tree, commit (parent B),<br/>head written last
+    Ahead --> Push: tree, commit (parent R),<br/>head written last, then B
     Apply --> Blocked: verify failed, rolled back
-    Apply --> InSync: verified, B and head := R
-    Push --> InSync: B and head := new commit
+    Apply --> InSync: verified, head then B := R
+    Push --> InSync: head then B := new commit
     Forked --> Notify: deduplicated alert,<br/>no app files touched
+    HoldLocal --> Notify: edit kept local, not pushed
     Blocked --> Notify
     Stopped --> Notify
     InFlight --> [*]: retry next tick, alarm if stuck

@@ -20,7 +20,7 @@ The maintainer also asked whether the number of hosts matters. It doesn't. No lo
 |---|---|---|---|
 | Host identity | derived at runtime, never configured | — | `host_id = sha256(IOPlatformUUID + ":" + username)[:12]`; the hardware source is per OS ([contract A](../contracts/os-connector.md) `HostIdentity`) |
 | Local pointer | `~/.config/schrodeck/config.toml` (optional) | this host | `store = "<path>"` only |
-| Per-host config | `<store>/hosts/<host_id>.toml` | **this host only** | friendly name, variable values, subscriptions (`profile_id → deck`), host-specific overrides (e.g. `retention.local`) |
+| Per-host config | `<store>/hosts/<host_id>.toml` | **this host only** | friendly name, variable values, subscriptions (`profile_id → deck`), GC `pins` ([contract D](../contracts/store-format.md#garbage-collection-trees-only)), host-specific overrides (e.g. `retention.local`) |
 | Common config | `<store>/config.toml` | any host, rarely | truly shared settings: variable *declarations* (name + default), `retention.*` defaults, `notify.*`, `apply.*`, script replication map |
 
 - **No membership.** There is no group roster that any decision depends on. A host participates by having a head; a retired host's files are inert. The set of `hosts/*.toml` files is a **display-only registry**, used for friendly names in `status`, notifications and the log. It is also used for the push collision guard ([0006](0006-normalization-and-variables.md)), which only *reads* other hosts' variable values.
@@ -33,7 +33,7 @@ The maintainer also asked whether the number of hosts matters. It doesn't. No lo
 - Good: one home per fact, and no multi-writer file except a rarely written settings file.
 - Good: renames and OS reinstalls keep the same `host_id` on macOS. A new logic board or a new Mac is a new host with a safe first run.
 - Good: adding or retiring hosts changes nothing for the others.
-- Bad: a retired host's `hosts/*.toml` and head linger until GC ([0027](0027-store-lifecycle.md)) or `schrodeck uninstall --leave-store`.
+- Bad: a retired host's `hosts/*.toml` and head linger until someone runs `schrodeck forget-host` or that host ran `schrodeck uninstall --leave-store`. Nothing about a host is deleted automatically ([0027](0027-store-lifecycle.md)). They are inert: a retired head is subsumed by R and blocks nothing.
 - Risk: the hardware id source differs per OS, and Windows' `MachineGuid` changes on reinstall (noted in contract A).
 
 ## Alternatives considered

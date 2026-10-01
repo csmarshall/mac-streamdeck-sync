@@ -25,9 +25,9 @@
 3. PR with `Closes #n`; commits `fix(#n): …` / `feat(#n): …`.
 4. CI (GitHub Actions) must be green before merge: Go core on Linux (gofmt check, go vet, staticcheck, go test); macOS adapters and the Swift notifier on macOS runners.
 5. Code-review subagent on the diff, then human review.
-6. Squash-merge. Deploy deliberately with `./install.sh` on each Mac. Use `./install.sh --check` for drift.
+6. Squash-merge. Releases ship through the release PR and the Homebrew tap (ADR 0028); nothing is deployed by hand. To dogfood an unreleased build on a Mac, build and install locally (`brew install --build-from-source` from a local tap checkout, or the repo's documented dev build), then `schrodeck doctor`. Packages never install the LaunchAgent; `init`/`join` do.
 
 ## Toolchain
 
 - **Go** core and CLI (ADR 0018): all sync logic behind OS ports. The port list lives ONLY in `docs/contracts/os-connector.md` (contract A); never restate it or its count elsewhere. macOS adapters now; Windows is a future adapter set. Core tests use fake adapters and run on Linux. Tools: gofmt, go vet, staticcheck, go test.
-- **Swift** only at the edges: `SchrodeckNotifier.app` (UserNotifications, built + ad-hoc signed by `install.sh`, installed into `~/Applications`, which is required for notifications to work), and later a SwiftUI menu-bar app.
+- **Swift** only at the edges: `SchrodeckNotifier.app` (UserNotifications, built and ad-hoc signed by the Homebrew formula's source build, then copied into `~/Applications` by `init`/`join`, which is required for notifications to work), and later a SwiftUI menu-bar app.
