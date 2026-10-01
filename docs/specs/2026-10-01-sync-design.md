@@ -48,7 +48,7 @@ Configuration has three layers. Each fact has exactly one home:
 |---|---|---|---|
 | **Host identity** | derived at runtime, never stored as config | `host_id = sha256(IOPlatformUUID + ":" + username)[:12]` | yes, but computed |
 | **Local pointer** | `~/.config/mac-streamdeck-sync/config.toml` (optional) | `store = "<path>"`: where the shared directory is mounted *on this Mac* | yes: path only |
-| **Common config** | `<store>/config.toml` | deck allowlist, `retention` (restore points per deck, default 20), script-replication map, notification prefs, host registry (`host_id → friendly name`) | no: one copy, shared by all hosts |
+| **Common config** | `<store>/config.toml` | deck allowlist, `retention.local` (X) / `retention.shared` (Y) restore points per deck, script-replication map, `notify.level`, host registry (`host_id → friendly name`) | no: one copy, shared by all hosts |
 
 - **Why hardware + username:** `IOPlatformUUID` survives renames and OS reinstalls; `ComputerName`/hostname are user-editable and can collide. Stream Deck profiles are per macOS user, so two accounts on one Mac are two hosts. A new logic board or a new Mac gets a new `host_id` and starts as a clean FirstRun, which is safe by construction.
 - **Store discovery order:** `--store` flag → local pointer → Dropbox's `~/.dropbox/info.json` (`personal`/`business` path) + `/mac-streamdeck-sync` → iCloud Drive `~/Library/Mobile Documents/com~apple~CloudDocs/mac-streamdeck-sync`. More than one candidate containing a store `FORMAT` file → refuse and ask. Never guess between two stores.
@@ -119,24 +119,57 @@ This scales to N Macs without clocks or coordination. Each Mac keeps only its ow
 
 - **Deck attach:** a LaunchAgent with `LaunchEvents` → `com.apple.iokit.matching` on `idVendor = 0x0fd9`. It fires when the switch hands the deck to this Mac, which is exactly when Behind matters.
 - **Timer:** `StartInterval` of about 15 min, to push edits made while attached.
-- **CLI:** `sdsync status | sync | push | pull | resolve --keep local|remote|<snapshot> | history | rollback | hold | resume | inventory | doctor`.
+- **CLI:** `sdsync status | sync | push | pull | resolve --keep local|remote|<snapshot> | history | rollback | hold | resume | log | inventory | doctor`.
+- A single lock file (`fcntl.flock`) keeps triggers from overlapping.
 
 ## History and rollback
 
-Two independent rings of restore points per deck, both sized by `retention` in the common config (default **20**, one value shared by all hosts):
+Two independent rings of restore points per deck, sized separately in the common config:
 
-| Ring | Where | Written | Survives |
-|---|---|---|---|
-| **Local** | `~/Library/Application Support/mac-streamdeck-sync/history/<deck>/<ts>-<reason>/` | before every pull, rollback, and resolve, and after every push (the tree as published) | a corrupted or deleted shared store |
-| **Shared** | `<store>/decks/<deck>/snapshots/<ts>-<host_id>/` | every push, and both sides of every diverge | losing or replacing a Mac |
+| Ring | Size key (default) | Where | Written | Survives |
+|---|---|---|---|---|
+| **Local** (X) | `retention.local` (20) | `~/Library/Application Support/mac-streamdeck-sync/history/<deck>/<ts>-<reason>/` | before every pull, rollback, and resolve, and after every push (the tree as published) | a corrupted or deleted shared store |
+| **Shared** (Y) | `retention.shared` (20) | `<store>/decks/<deck>/snapshots/<ts>-<host_id>/` | every push (every shared change), and both sides of every diverge | losing or replacing a Mac |
+
+- Both values live in the common config, so every Mac keeps the same X. A Mac that needs a different X (small disk, say) gets a host-keyed override **in the common config** (`[hosts.<host_id>] retention_local = 5`). That keeps one home per fact and leaves the local pointer as a path only.
 
 - Each entry carries a small `meta.json`: normalized hash, reason (`pre-pull`, `pushed`, `pre-rollback`, `diverged-local`, `diverged-remote`), host, app version, timestamp.
-- Rotation is by count only. It keeps the newest `retention` entries and **never** removes the entry matching the current R or this host's B, so the live state always has a restore point.
+- Rotation is by count only. Each ring keeps its newest X / Y entries and **never** removes the entry matching the current R or this host's B, so the live state always has a restore point.
 - `sdsync history [--deck D]` lists both rings with a short id, age, host, reason and hash. Entries with the same hash collapse into one line.
 - `sdsync rollback <id> [--deck D]` stages the chosen entry, takes a `pre-rollback` local snapshot, then applies it with the normal quit → swap → relaunch → verify path. Afterwards L ≠ B, so the next sync is **Ahead** and the rollback is **pushed as a new generation**. Every Mac converges on it, and nothing in the history is rewritten.
 - `sdsync rollback <id> --hold` applies the rollback locally and pauses automatic sync **for that deck on this host** until `sdsync resume`. Use it to try an old config without publishing it. While held, `status` and notifications say so. Without a hold, the next tick would see the rollback as a local edit and push it, which is right for "this config broke, revert everywhere" and wrong for "let me just look".
 - A rollback never deletes anything. Rolling back to a rollback is an ordinary rollback.
-- A single lock file (`flock`-style) keeps triggers from overlapping.
+
+## Logging and the event trail
+
+Every run logs; every **state change** is also recorded as an event.
+
+- **Local log:** `~/Library/Logs/mac-streamdeck-sync/sdsync.log`, so Console.app shows it under Log Reports. Format: `2026-10-01T12:30:05-0500 INFO  [deck 3f2a91] Behind -> Pull: R=9c1e… B=41d0… (trigger=attach)`. Levels: DEBUG (each step), INFO (decisions and transitions), WARN (held, in flight, missing script/plugin), ERROR (failure + the state it left things in). `SDSYNC_LOG_LEVEL` overrides; default INFO. Size-rotated, keeping 5 files.
+- **Event trail (shared):** `<store>/events/<host_id>.jsonl`, append-only, **one file per host** so two Macs never write the same file and Dropbox never makes a conflicted copy. Each line: `{ts, host_id, deck, from_state, to_state, action, hashes{L,R,B}, trigger, result}`. Rotated by count, the same as the log.
+- `sdsync log [--deck D] [--host H] [--since 1d]` merges all hosts' event files by timestamp into one timeline: *who pushed what, who pulled it, where it diverged*. Timestamps are for **display only**. No decision ever reads them, so clock skew between Macs can make the timeline look out of order but can never change behavior.
+- InSync ticks with no transition log at DEBUG only, so a 15-minute timer doesn't fill the log.
+- Never logged: tokens, raw `Device.UUID`/serials, raw `IOPlatformUUID`. Decks and hosts appear as short hashes plus friendly names.
+
+## Notifications
+
+macOS Notification Center, with the tool's own icon.
+
+- **Mechanism:** a tiny helper app, `SDSyncNotifier.app`: about 60 lines of Swift on `UserNotifications`, with its own bundle id and icon. `install.sh` builds it with `swiftc` and ad-hoc signs it. A notification's icon belongs to the app that posts it, so this is the only supported way to get a custom icon. `osascript display notification` always shows Script Editor's icon, and `terminal-notifier`'s `-appIcon` depends on a private API that recent macOS ignores.
+- **Fallback:** if the helper is missing (no Xcode/CLT on that Mac), fall back to `osascript`. The notification still arrives, with the generic icon.
+- **Icon:** an *original* design that suggests a key grid with a sync arrow. It must **not** be Elgato's logo or app icon. This is a public repo, and borrowing their mark implies an affiliation that doesn't exist.
+- **What notifies** (configurable in the common config, `notify.level`):
+
+| Event | Default | Example |
+|---|---|---|
+| Pull starting (the deck is about to blank) | on | "Updating Stream Deck XL from <host>…" |
+| Pull / push / rollback done | on | "Stream Deck XL updated (pushed by <host> 4 min ago)" |
+| Diverged | on, persistent | "Stream Deck XL changed on two Macs. Run `sdsync resolve`." |
+| Failed + restored | on, persistent | "Update failed; restored previous layout." |
+| Missing plugin / script / shortcut after a pull | on | "2 buttons need things this Mac lacks. Run `sdsync inventory`." |
+| Held deck skipped | once per hold | |
+| InSync | never | |
+
+- Clicking a notification opens the log in Console (for errors) or does nothing (for info).
 
 ## Inventory and scripts
 
@@ -157,9 +190,7 @@ Replicating scripts through a cloud folder means **running code that arrived fro
 
 - **Schema guard:** refuse to run if the app version or the manifest key set differs from the known set, until `sdsync doctor` passes and the user confirms.
 - **Dry run** builds everything in a scratch dir and writes nothing beside the target (not even mtimes).
-- Never delete a snapshot or local history entry automatically except by count-based rotation (`retention`, see History and rollback).
-- Logs: timestamp, level, deck short-hash, state, action. `SDSYNC_LOG_LEVEL` sets the level. No tokens or full device IDs in logs.
-- Notifications through `osascript display notification` (no extra dependency).
+- Never delete a snapshot or local history entry automatically except by count-based rotation (`retention.local` / `retention.shared`).
 
 ## Testing
 
@@ -172,3 +203,4 @@ Replicating scripts through a cloud folder means **running code that arrived fro
 1. **Is `Device.UUID` the same on every Mac for the same physical deck?** It looks derived from the serial, which would make it portable, but this has not been checked on a second Mac. If it is host-specific, the deck key becomes `Model + serial` read from IOKit.
 2. **Can you edit a deck's profile while that deck is not attached?** If yes, "only the attached Mac pushes" would block real edits, and pushes should be gated on L ≠ B alone.
 3. License (proposed: MIT).
+4. **Do notifications from an ad-hoc-signed helper app work on macOS 27?** The posting app needs the user's one-time permission. Unverified until a spike posts a real notification on a macOS 27 machine.
