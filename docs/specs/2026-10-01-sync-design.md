@@ -134,11 +134,11 @@ ADR [0006](../adr/0006-normalization-and-variables.md), [contract C](../contract
 - **Collision guard:** a push is refused if the local copy contains another host's value as a literal (e.g. the other Mac's home path baked into an `Open` button).
 - **Changing a variable's value re-materializes** the local copy through the apply, and never pushes by itself. It first checks the copy under the old values: an unpushed edit is pushed first, so re-materializing never overwrites it.
 
-## Applying: plan, revision, verify
+## Applying: plan, commit, verify
 
 ADR [0008](../adr/0008-two-phase-apply.md), [0019](../adr/0019-selected-profile-stays-per-host.md).
 
-Changing the app's files is surgery on a live system. **The app restart is the revision point. Everything that can fail is checked before it, and local state is re-checked once the app can no longer write.**
+Changing the app's files is surgery on a live system. **The app restart is the commit point (in the transaction sense, not a store revision or a git commit). Everything that can fail is checked before it, and local state is re-checked once the app can no longer write.**
 
 A run goes:
 1. Pushes.

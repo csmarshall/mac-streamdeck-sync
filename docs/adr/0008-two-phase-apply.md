@@ -1,4 +1,4 @@
-# 0008. Applying an update is plan → revision → verify, with a post-quit re-check
+# 0008. Applying an update is plan → commit → verify, with a post-quit re-check
 
 Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18):
 - a post-quit re-check;
@@ -28,7 +28,7 @@ The review found that reading local state only **before** quitting loses edits. 
 
 Two copies of one profile on one host (on two decks) are applied in the same batch, so the app restarts once. Rollback is **all-or-nothing per run**.
 
-**The app restart is the revision point. Everything that can fail is checked before it, and the local state is re-checked after the app has stopped writing.**
+**The app restart is the commit point (in the transaction sense). Everything that can fail is checked before it, and the local state is re-checked after the app has stopped writing.**
 
 ![apply state diagram](../apply-states.png)
 
