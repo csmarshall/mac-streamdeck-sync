@@ -1,6 +1,6 @@
 # 0005. Direction is decided by normalized hashes and a revision graph, never by clocks
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F1, F4): R now comes from per-host heads over an immutable revision graph, not from one shared `current.json`. Revised 2026-10-01 (review round 2: F27, F28, F30, F32, F34, F38): freshness is checked first; equal-hash tips are converged; R ignores heads below this host's `norm_version`; Anomaly and HoldLocal states; B is recoverable from this host's own head. Revised 2026-10-01 (review round 3: F40, F42, F47): equivalence is evaluated only between live tips, never against ancestors, so an undo or rollback to earlier content can't be reverted; pending older-version edits are reported; the Ahead parent is R everywhere.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F1, F4): R now comes from per-host heads over an immutable revision graph, not from one shared `current.json`. Revised 2026-10-01 (review round 2: F27, F28, F30, F32, F34, F38): freshness is checked first; equal-hash tips are converged; R ignores heads below this host's `norm_version`; Anomaly and HoldLocal states; B is recoverable from this host's own head. Revised 2026-10-01 (review round 3: F40, F42, F47): equivalence is evaluated only between live tips, never against ancestors, so an undo or rollback to earlier content can't be reverted; pending older-version edits are reported; the Ahead parent is R everywhere. Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): StoreLost, LocalDeleted, Anomaly and the other unexpected conditions all become DETACHED(reason), which persists until `resolve`.
 
 ## Context
 
@@ -31,13 +31,15 @@ Normally `B.local_hash` equals the hash of `B.revision`. They differ only after 
 
 | Condition (checked in this order) | State | Action |
 |---|---|---|
+| this copy is already DETACHED (persisted local state) | DETACHED(reason) | nothing for this setup on this host until `resolve` ([0030](0030-fail-closed-detach.md)) |
 | the provider does not report the profile's store files as current, or a referenced revision, or R's tree, is missing or invalid | InFlight | nothing this tick; alarm if stuck ([0023](0023-store-freshness-via-file-provider.md)). Checked **first**, so a not-yet-delivered store is never mistaken for a deleted one (review F30) |
 | an unsuperseded tombstone record exists | Unshared | detach, notify once ([0025](0025-deletion-and-unshare.md)) |
-| store reported fresh, no heads, B present, no tombstone (persisting across runs, see [0025](0025-deletion-and-unshare.md)) | StoreLost | stop, notify; never resurrect, never wipe. Clears by itself when heads reappear |
-| local copy missing, B present | LocalDeleted | stop for this copy, notify; never propagate ([0025](0025-deletion-and-unshare.md)) |
+| store reported fresh, no heads, B present, no tombstone (persisting across runs, see [0025](0025-deletion-and-unshare.md)) | DETACHED(store-lost) | stop, notify once; never resurrect, never wipe; persists until `resolve` ([0030](0030-fail-closed-detach.md)) |
+| local copy missing, B present | DETACHED(local-deleted) | this host drops out of the setup for this copy, notify once; never propagate ([0025](0025-deletion-and-unshare.md), [0030](0030-fail-closed-detach.md)) |
 | this host's `norm_version` is older than R's, or the store `FORMAT` is newer than this host's | VersionMismatch | read-only for this profile; notify once ([0027](0027-store-lifecycle.md)). Heads at an **older** `norm_version` than this host's don't trigger this: they are ignored for R (review F28). One that isn't an ancestor of the rebase revision is reported as a **pending older-version edit** (status, event, one notification), never silently dropped (review F42) |
 | live heads don't converge (no R) | Forked | push this host's unpushed local edit, if any, as its own revision so it is preserved; then wait for `resolve` ([0007](0007-conflict-policy.md)) |
-| R does not subsume `B.revision` | Anomaly | stop, notify once; never read as Behind (the store went backwards: own head lost or a provider restore) (review F34) |
+| R does not subsume `B.revision` | DETACHED(store-went-backwards) | stop, notify once; never read as Behind (own head lost or a provider restore) (review F34, [0030](0030-fail-closed-detach.md)) |
+| the copy's device is gone, the copy was re-bound to another device, holds a foreign device id or a colliding variable literal, is duplicated, or its apply journal is unreadable | DETACHED(reason) | per the classification table in [0030](0030-fail-closed-detach.md) |
 | L == hash(R) | InSync | B := (R, L), after moving this host's head to R if it isn't already ≡ R |
 | L == B.local_hash, R ≢ B.revision | Behind | apply ([0008](0008-two-phase-apply.md)), unless this host has BLOCKED(R) or the incoming fingerprint is unknown here |
 | L ≠ B.local_hash, R ≡ B.revision | Ahead | push a revision whose parent is R ([0009](0009-store-write-protocol.md)); who may push: [0021](0021-who-may-push.md) |
@@ -45,7 +47,7 @@ Normally `B.local_hash` equals the hash of `B.revision`. They differ only after 
 | L ≠ B.local_hash, R ≢ B.revision | Diverged | push the local edit as a revision with parent B.revision (the store now shows a fork), notify, wait for `resolve` ([0007](0007-conflict-policy.md)) |
 | no B; this host is sharing the profile and there are no heads | FirstShare | push the root revision |
 | no B; this host's own head exists | Recover | B := (own head's revision, its hash); then re-evaluate. A host that lost its local state rebuilds B from the head it wrote (review F38), so it sees InSync or Ahead, not a spurious Diverged |
-| no B; a `subscribe` is pending | Install | apply R as a new copy ([0026](0026-profile-identity.md)) |
+| no B; a `subscribe` is pending | Install | apply R as a new member copy on the chosen destination device ([0026](0026-profile-identity.md), [0029](0029-problem-statement-and-setup-model.md)) |
 
 ![sync state diagram](../sync-states.png)
 
@@ -83,7 +85,7 @@ No check yet; to be written in the plan:
 - **Undo / rollback to an ancestor's content** (review F40): A(h0) → C(h1) → RB(h0, parent C) ⇒ R = RB on every host and no host re-applies C. Known-bad: the previous rule (equivalence against ancestors) lets C subsume RB as well, so two non-equivalent tips qualify for R; this test must fail against it ([contract D § enforced by](../contracts/store-format.md#enforced-by)).
 - Pending older-version edit: after `migrate`, an old-version host pushes ⇒ every upgraded host shows it in `status` and sends exactly one notification; R is unchanged.
 - HoldLocal: a BLOCKED host edits the profile ⇒ no push, one notification over 10 runs, and the other hosts see no fork.
-- Anomaly: this host's head reverted to an ancestor ⇒ Anomaly, no apply.
+- Store went backwards: this host's head reverted to an ancestor ⇒ DETACHED(store-went-backwards), no apply, persisting until `resolve`.
 - Recover: delete local state on a host whose head exists ⇒ InSync on the next run, no Diverged.
 
 ## References

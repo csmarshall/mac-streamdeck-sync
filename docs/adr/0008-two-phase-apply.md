@@ -1,6 +1,6 @@
 # 0008. Applying an update is plan → commit → verify, with a post-quit re-check
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18):
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing.
 - a post-quit re-check;
 - the incoming fingerprint is validated;
 - a verify failure ends in BLOCKED, not a retry loop;
@@ -65,6 +65,7 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
 - `swapped` or later: roll forward. Quit, make sure every target's staged-in tree is present (finishing any rename that was half done), relaunch, then verify as in step 8.
 - If the app was relaunched by the user or at login before recovery runs, recovery quits it first (step 3) and proceeds.
 - Every recovery path ends with the app in its pre-apply running state. An apply never leaves a deck dead.
+- If the journal is unreadable or inconsistent (no recorded step can be trusted), recovery restores the app's running state and marks every target in the journal **DETACHED(apply-recovery)** ([0030](0030-fail-closed-detach.md)) instead of guessing between roll-forward and discard.
 
 The selected profile per deck is never touched ([0019](0019-selected-profile-stays-per-host.md)).
 

@@ -1,19 +1,23 @@
 # schrodeck — design
 
-Status: DRAFT for review, aligned with ADRs 0001–0028 after the 2026-10-01 independent review (2026-10-01). No code exists yet.
+Status: DRAFT for review, aligned with ADRs 0001–0030 after the 2026-10-01 independent review and the template-seeded setup reframe (2026-10-01). No code exists yet.
 
 This document is the narrative of how schrodeck fits together. The *why* behind each choice, and the alternatives rejected, live in the [ADRs](../adr/README.md). Exact formats live in the [contracts](../contracts/README.md), not here. Each section links the ADRs and contracts it relies on. Facts about the Stream Deck app are cited from [references.md](../references.md) as `[Rn]` and marked *documented* (Elgato states it) or *observed* (seen on a real machine, not promised).
 
 ## Problem
 
-One or more Stream Decks are shared between several computers, for example through a Thunderbolt or KVM switch. You edit a profile on Mac A, flip the switch, and Mac B shows the old layout. The Stream Deck app keeps profiles per machine. It has no automatic cross-machine sync for desktop decks, only manual export/import ([R18], documented by absence).
+You want a given kind of Stream Deck (same geometry, e.g. every XL) to show **the same profile setup at every computer you sit at**, kept in sync automatically, without exporting, importing and shuffling profiles by hand. One or more decks may be shared between computers through a Thunderbolt or KVM switch, or each desk may have its own deck of the same model.
+
+The Stream Deck app keeps profiles per machine and has no automatic cross-machine sync for desktop decks, only manual export/import ([R18], documented by absence). It also has **no device-type → profile grouping**: each profile belongs to exactly one device ([streamdeck-config-model.md](../streamdeck-config-model.md)). schrodeck adds that missing layer, called a **setup** (ADR [0029](../adr/0029-problem-statement-and-setup-model.md)).
 
 ## Goals
 
-- Run unattended on every host and keep **shared profiles** converged through a shared cloud folder: Dropbox, iCloud Drive, or any folder a sync client replicates (ADR [0002](../adr/0002-transport-shared-cloud-folder.md)).
-- Let each host decide on its own, per shared profile, whether its copy is **behind**, **ahead**, **in sync**, or **diverged**. Push when ahead, apply when behind, and **never silently drop an edit**, including when two hosts push at once.
+- Run unattended on every host and keep every **setup's member copies** converged through a shared cloud folder: Dropbox, iCloud Drive, or any folder a sync client replicates (ADR [0002](../adr/0002-transport-shared-cloud-folder.md)).
+- Let each host decide on its own, per member copy, whether its copy is **behind**, **ahead**, **in sync**, or **diverged**. Push when ahead, apply when behind, and **never silently drop an edit**, including when two hosts push at once.
 - Need nothing beyond the shared folder and local CLI tools. **No network access between hosts**: machines on the same desk can have different firewalls, VPNs or endpoint agents.
-- Support **any number of hosts and decks**, with no membership list and no coordination. A profile created on one machine can be used on others, including on a **different physical deck** with the same geometry.
+- Support **any number of hosts and decks**, with no membership list and no coordination. A setup created on one machine can be joined on others, onto a **different physical deck** with the same geometry, and every member copy is a peer: an edit on any of them syncs to all.
+- **Only touch profiles schrodeck created.** Setups are seeded from a template the user picks, as a new profile; templates and every other profile are never written ([0029](../adr/0029-problem-statement-and-setup-model.md)).
+- **Fail closed:** any change outside schrodeck's expectations makes that Mac drop out of that setup (DETACHED) until the user resolves it ([0030](../adr/0030-fail-closed-detach.md)).
 - Build the macOS version first, with the OS-specific parts behind interfaces so that other OS connectors can be added later (ADR [0018](../adr/0018-runtime-and-architecture.md)).
 
 ## Non-goals (v1)
@@ -22,7 +26,9 @@ One or more Stream Decks are shared between several computers, for example throu
 - Re-flowing a profile onto a deck with a different geometry, such as 32 keys onto 15 (ADR [0004](../adr/0004-shared-profiles-and-subscriptions.md)).
 - Installing or copying plugins, and syncing plugin global settings (ADR [0014](../adr/0014-plugin-handling.md); copying is investigated in issue #4).
 - Syncing which profile is selected on each deck (ADR [0019](../adr/0019-selected-profile-stays-per-host.md)).
-- Propagating deletes (ADR [0025](../adr/0025-deletion-and-unshare.md)).
+- Propagating deletes. Deleting a member copy makes that Mac drop out of the setup (ADR [0025](../adr/0025-deletion-and-unshare.md), [0030](../adr/0030-fail-closed-detach.md)).
+- **Bringing a joining computer's existing configuration into a setup, or merging two computers' configs.** Joiners only receive. A merge can be done by hand (quit the app, edit or copy profiles) at the user's own risk; schrodeck won't manage it ([0029](../adr/0029-problem-statement-and-setup-model.md)).
+- Automatically recovering from unexpected changes. v1 detaches and asks; specific cases may get automation later, each with its own ADR ([0030](../adr/0030-fail-closed-detach.md)).
 
 ## Prior art
 
@@ -36,8 +42,10 @@ One or more Stream Decks are shared between several computers, for example throu
 | **Host** | One macOS user account on one machine. Identity is derived, never configured (ADR [0010](../adr/0010-host-identity-and-config-layering.md)). The number of hosts never matters to any decision. |
 | **Deck** | A Stream Deck as one host's app sees it: physical or virtual. Each host enumerates *its own* decks from the app's data. The sync logic needs no USB access (ADR [0003](../adr/0003-decks-are-local-geometry-compatibility.md)). |
 | **Geometry** | Columns × rows, plus dial/encoder count, from Elgato's DeviceType table ([R8], documented). Two decks are **compatible** when their geometry matches. |
-| **Shared profile** | The unit of sync: one Stream Deck profile (all its pages and folders) that a user opted in with `share`. It has a permanent `profile_id` (ADR [0026](../adr/0026-profile-identity.md)). Unshared profiles are never touched. |
-| **Copy / subscription** | A host's local copy of a shared profile, installed onto one compatible local deck. **Every subscribed copy is kept up to date**, whether or not it is the deck's active profile. |
+| **Setup** | The unit of sync: one shared profile (all its pages and folders) with a permanent `profile_id`, a geometry, and a user-provided name (ADR [0029](../adr/0029-problem-statement-and-setup-model.md), [0026](../adr/0026-profile-identity.md)). "Shared profile" is Elgato's term for what a setup contains. |
+| **Template** | The profile a setup was seeded from, picked by the user at `init`/`share`. It is copied once and **never modified or synced**. |
+| **Member copy** | A profile schrodeck created for a setup on one host's chosen device, named `schrodeck - <cols>x<rows> - <name>`. Created at `init`/`share` (from the template) and at `join`/`subscribe` (always a **new** profile). **Every member copy is kept up to date**, whether or not it is the deck's active profile, and all member copies are peers. Profiles that aren't member copies are never touched. |
+| **DETACHED(reason)** | A member copy whose host dropped out of the setup after an unexpected change. The profile is left as-is, nothing syncs for it there, and it stays that way until `schrodeck resolve` (ADR [0030](../adr/0030-fail-closed-detach.md)). |
 | **Store** | The shared cloud folder. Its format is [contract D](../contracts/store-format.md). |
 | **Revision / head** | Each version of a shared profile is an immutable **revision** in the store: a record of its content hash, its stored tree and its parent revision(s). This is schrodeck's own record in the shared folder, modeled on git's idea but **not** a git commit; in these docs "commit" only ever means git. Each host owns a **head** naming the revision its copy is at. **R** is the newest revision all live heads descend from (equal-content *tips* count as one; history is matched by ancestry only, so an undo to earlier content is a new revision that wins). |
 
@@ -61,24 +69,28 @@ Observed on Stream Deck 7.5.1, macOS 27. The schema guard re-checks them after e
 
 ## User workflow
 
-Onboarding (ADR [0022](../adr/0022-onboarding-init-and-join.md)):
+Onboarding (ADR [0022](../adr/0022-onboarding-init-and-join.md), [0029](../adr/0029-problem-statement-and-setup-model.md)):
 
 ```
-host A:  schrodeck init                     # preflight the app; pick the shared dir and profile(s); first push
-host B:  schrodeck join <dir>               # preflight; DRY-RUN rundown; choose what to subscribe and onto which deck;
-                                            # confirm; first sync runs in the foreground; then the agent is installed
+host A:  schrodeck init                     # preflight the app; pick the shared dir; pick a device + TEMPLATE profile and a name;
+                                            # creates a NEW profile "schrodeck - 8x4 - Work" (template untouched); first push
+host B:  schrodeck join <dir>               # preflight; lists setups whose geometry matches a device here; pick setup + destination;
+                                            # DRY-RUN rundown; confirm; a NEW profile is created; first sync in the foreground;
+                                            # then the agent is installed. Nothing on host B is replaced or brought into the setup
 ```
 
 Day to day:
 
 ```
-host A:  schrodeck share "Work"                     # opt in; published to the store; may offer the rename "schrodeck · Work · 8×4"
-host B:  (notification: "Shared profile Work (8×4) is available")
-host B:  schrodeck subscribe "Work" --deck <deck>   # installs a NEW copy on a local deck with 8×4 geometry
-         # edit Work on either host; the other host applies it automatically
-host B:  schrodeck unsubscribe "Work"               # stop syncing; the local copy stays, detached
-host A:  schrodeck unshare "Work"                   # tombstone; every subscriber keeps a detached copy
-host B:  schrodeck reshare <profile_id>             # undo an accidental unshare; detached subscribers resume
+host A:  schrodeck share                            # another setup: pick device + template + name -> new member copy
+host B:  (notification: "Setup 'schrodeck - 8x4 - Work' is available")
+host B:  schrodeck subscribe <setup> --deck <deck>  # always a NEW profile on a matching device
+         # edit any member copy on any host; every other member copy follows automatically
+host B:  (deletes its member copy in the app) -> DETACHED(local-deleted), one notification
+host B:  schrodeck resolve <setup>                  # rejoin as a new profile, replace only the detached copy, publish, or unmap
+host B:  schrodeck unsubscribe <setup>              # leave the setup; the local profile stays, detached
+host A:  schrodeck unshare <setup>                  # tombstone; every member keeps a detached copy
+host B:  schrodeck reshare <profile_id>             # undo an accidental unshare; members detached by unshare resume
 ```
 
 The full CLI: `schrodeck init | join | status | sync | share | unshare | reshare | subscribe | unsubscribe | push | pull | resolve | unblock | history | rollback | hold | resume | log | inventory | doctor | config | config resolve | migrate | gc | forget-host | uninstall | agent`. Every command accepts `--json`, which is **the contract for any UI** (contract E, ADR [0018](../adr/0018-runtime-and-architecture.md)).
@@ -87,7 +99,7 @@ The full CLI: `schrodeck init | join | status | sync | share | unshare | reshare
 
 ADR [0005](../adr/0005-direction-detection-three-way-hash.md), [0021](../adr/0021-who-may-push.md), [contract D](../contracts/store-format.md).
 
-For each subscribed copy on each host:
+For each member copy on each host:
 
 ```
 L = hash(normalize(local copy))
@@ -105,8 +117,8 @@ The full decision table is in ADR 0005. In short:
 - Both moved, and this host can't take R (BLOCKED, or R's format fingerprint is unknown here) → **HoldLocal** → keep the edit local, notify once; never fork the group over one incompatible host.
 - Both moved otherwise → **Diverged** → push the local edit as its own revision, which makes a visible fork; notify; wait for `resolve`.
 - Live heads don't converge → **Forked** → no host applies anything until `resolve`.
-- R doesn't subsume this host's B (the store went backwards) → **Anomaly** → stop and notify; never read as Behind.
-- Tombstone, lost store, deleted local copy, missing deck, version mismatch → **stop and notify** (ADRs [0025](../adr/0025-deletion-and-unshare.md), [0026](../adr/0026-profile-identity.md), [0027](../adr/0027-store-lifecycle.md)).
+- Tombstone → the copy is detached by unshare and resumes on `reshare`; version mismatch → read-only until upgrade/`migrate`; schema guard → pause until `doctor`. These are **expected** pauses (ADRs [0025](../adr/0025-deletion-and-unshare.md), [0027](../adr/0027-store-lifecycle.md), [0015](../adr/0015-schema-guard.md)).
+- **Anything unexpected** (the member copy deleted in the app, the store copy lost, the store went backwards, the deck gone, the copy re-bound to another device, a foreign device id, a variable collision, a duplicate copy, a stale-version edit, an unreadable apply journal, or any unclassified condition) → **DETACHED(reason)**: that Mac drops out of that setup, the profile is left exactly as it is, nothing syncs for it there, one notification is sent, and it persists until `schrodeck resolve <setup>` (rejoin as a new profile, replace only the detached copy after confirmation, publish this copy where the cause allows, or unmap). The full expected/unexpected classification is in ADR [0030](../adr/0030-fail-closed-detach.md).
 - A host that lost its local state rebuilds B from its own head.
 
 ![sync state diagram](../sync-states.png)
@@ -206,13 +218,13 @@ ADR [0011](../adr/0011-history-and-rollback.md).
 
 ## Deletion, unshare and identity
 
-ADR [0025](../adr/0025-deletion-and-unshare.md), [0026](../adr/0026-profile-identity.md).
+ADR [0025](../adr/0025-deletion-and-unshare.md), [0026](../adr/0026-profile-identity.md), [0030](../adr/0030-fail-closed-detach.md).
 
-- `unshare` appends a tombstone record to this host's own tombstone file. Subscribers stop and keep a detached copy. `reshare` supersedes it, and detached subscribers resume, with edits made while detached preserved by the normal rules.
-- A locally deleted copy is **never** propagated: that host stops and notifies.
-- A store copy that vanished without a tombstone (declared only when the provider reports the store as fresh) stops and notifies. It is never resurrected or wiped, and the state clears by itself if the heads reappear.
+- `unshare` appends a tombstone record to this host's own tombstone file. Every member copy is detached by unshare and kept as an ordinary profile. `reshare` supersedes it, and copies detached by unshare resume, with edits made while detached preserved by the normal rules.
+- A member copy deleted in the app is **never** propagated: that Mac drops out of the setup, DETACHED(local-deleted); `resolve` suggests unmap, or rejoin as a new profile.
+- A store copy that vanished without a tombstone (declared only when the provider reports the store as fresh, and persisting) → DETACHED(store-lost). It is never resurrected or wiped, and it does **not** clear by itself.
 - When a host has nothing left to sync, the agent suggests `schrodeck uninstall` once, and never uninstalls itself.
-- `profile_id` is permanent. The sharing host keeps its folder, and subscribers get `uuid5(profile_id, deck_key)`, where `deck_key` is the deck's key in the app's prefs device list, so the mapping can be rebuilt. A deck whose key isn't unique on the host (e.g. two virtual decks) can't be subscribed onto. With two matching decks, `--deck` is required. If a deck disappears from the app, that copy stops until it returns.
+- `profile_id` is permanent. **Every** member copy, on every host (including the one created from the template at `init`/`share`), lives in a new folder named `uuid5(profile_id, deck_key)`, where `deck_key` is the deck's key in the app's prefs device list, so the mapping can be rebuilt. The template is never a member. A deck whose key isn't unique on the host (e.g. two virtual decks) can't be a destination. The user always picks the destination device. If a member copy's deck disappears from the app, that copy is DETACHED(deck-gone) until resolved.
 
 ## Triggers and loop protection
 

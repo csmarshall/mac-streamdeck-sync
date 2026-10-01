@@ -3,8 +3,9 @@ stateDiagram-v2
     [*] --> Fresh: trigger (watcher / timer / CLI / attach)
     Fresh --> InFlight: provider not current, or a revision<br/>or the tip tree is missing
     Fresh --> Read: store files current
-    Read --> Gate: for each subscribed copy<br/>R from live heads by ancestry<br/>(equal-hash TIPS converge, never vs history)<br/>L = hash(local), B = last synced
-    Gate --> Stopped: unshared, store lost, local deleted,<br/>deck gone, version mismatch, held, anomaly
+    Read --> Gate: for each member copy<br/>R from live heads by ancestry<br/>(equal-hash TIPS converge, never vs history)<br/>L = hash(local), B = last synced
+    Gate --> Detached: UNEXPECTED change (ADR 0030)<br/>local delete, store lost, store went backwards,<br/>deck gone, rebound, foreign device id,<br/>variable collision, duplicate, stale-version edit
+    Gate --> Paused: expected pause<br/>unshared, version mismatch, schema guard
     Gate --> Forked: live heads don't converge
     Gate --> Compare: R subsumes every live head and B
     Compare --> InSync: L == R
@@ -21,7 +22,8 @@ stateDiagram-v2
     Forked --> Notify: deduplicated alert,<br/>no app files touched
     HoldLocal --> Notify: edit kept local, not pushed
     Blocked --> Notify
-    Stopped --> Notify
+    Paused --> Notify
+    Detached --> Notify: drops out of this setup,<br/>profile left as-is, persists
     InFlight --> [*]: retry next tick, alarm if stuck
     InSync --> [*]
-    Notify --> [*]: waits for resolve / unblock / user
+    Notify --> [*]: waits for resolve / unblock / reshare / user

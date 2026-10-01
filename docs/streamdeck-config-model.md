@@ -115,4 +115,20 @@ device Mini ──1:N──▶ profiles               ├─▶ copy on Mac B's 
 
 schrodeck syncs at the **profile** level and installs each copy onto a local **device** of the same geometry. Everything per device that isn't a profile (which profile is selected, brightness, device name) stays local (ADR [0019](adr/0019-selected-profile-stays-per-host.md)).
 
-The refined goal ("the same setup on my XL at every computer, with no manual profile shuffling") is being worked out. It would sync the **set** of profiles owned by a device type rather than individually chosen profiles. See the open design questions in the session; this section will be updated when they're decided.
+**How a setup is built** (ADR [0029](adr/0029-problem-statement-and-setup-model.md), onboarding in [0022](adr/0022-onboarding-init-and-join.md)):
+
+1. **First computer (`init`, or `share` later):** schrodeck reads the app's config and lists the devices. You pick a device and a **template** profile on it, and name the setup. schrodeck creates a **new** profile on that device, copied from the template and named `schrodeck - <cols>x<rows> - <name>` (e.g. `schrodeck - 8x4 - Work`). That copy is the setup's first **member copy**. The template is never modified or synced. The setup records the template device's geometry.
+2. **Other computers (`join`, or `subscribe` later):** schrodeck lists the setups whose geometry matches one of this computer's devices. You pick a setup and a **destination device**, and schrodeck creates a **new** profile there. It never replaces or modifies an existing profile, and a joining computer's own profiles are never brought into a setup. Merging two computers' configs is out of scope (possible by hand, at your own risk).
+3. **From then on, all member copies are peers.** An edit on any of them reaches every other.
+
+Mapped onto the app's model:
+
+| App concept | In a setup |
+|---|---|
+| Device | the user picks the destination device on each computer; two same-size decks are just two possible destinations |
+| Profile | each member copy is an ordinary profile the app owns, created by schrodeck, in a folder named from (setup, device) |
+| Selected profile | untouched; each computer shows whatever profile it shows ([0019](adr/0019-selected-profile-stays-per-host.md)) |
+| Pages, folders, buttons | travel inside the member copy |
+| Every other profile (templates included) | never read for sync, written or deleted |
+
+Anything unexpected about a member copy (deleted in the app, re-bound to another device, its deck gone, …) makes that computer **drop out** of the setup until you resolve it (ADR [0030](adr/0030-fail-closed-detach.md)).

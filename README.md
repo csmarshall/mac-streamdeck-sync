@@ -2,22 +2,24 @@
 
 *Your Stream Deck profile is in superposition across every Mac it has been on, until you attach a deck and it collapses into the latest state.*
 
-Keep Elgato Stream Deck profiles in sync across several computers, including different physical decks with the same layout size, for example through a Thunderbolt or KVM switch, using nothing but a shared cloud folder (Dropbox, iCloud Drive, …).
+Give a Stream Deck the **same profile setup at every computer you sit at**, kept in sync automatically, including different physical decks with the same layout size, for example through a Thunderbolt or KVM switch, using nothing but a shared cloud folder (Dropbox, iCloud Drive, …).
 
 > **Status: design phase.** No working code yet. See the [design spec](docs/specs/2026-10-01-sync-design.md) and the [architecture decision records](docs/adr/README.md).
 
 ## The problem
 
-You edit a profile on Mac A, flip the switch, and Mac B shows yesterday's layout. The Stream Deck app keeps profiles per machine and has no automatic cross-machine sync.
+You have an XL at every desk (or one XL on a switch) and want the same buttons everywhere. You edit a profile on Mac A, and Mac B still shows yesterday's layout. The Stream Deck app keeps profiles per machine, has no automatic cross-machine sync, and has no notion of "the setup for all my XLs": every profile belongs to exactly one device. schrodeck adds that layer.
 
 ## The approach
 
-- You opt profiles in: `schrodeck share "Work"` on one machine, `schrodeck subscribe "Work"` on the others. The subscription can go onto any local deck with the same geometry (columns × rows, dials), including a virtual deck. Profiles you don't share are never touched.
+- **Setups, seeded from a template.** On the first machine, `schrodeck init` lists your decks; you pick one and a profile on it as the **template**, and name the setup. schrodeck creates a **new** profile from it, e.g. `schrodeck - 8x4 - Work`. Your template is never modified.
+- **Joining.** On another machine, `schrodeck join <shared folder>` lists only the setups that fit a deck you have (same columns × rows and dials), you pick a destination deck, and it creates a **new** profile there. It never replaces your existing profiles, and never pulls your other machine's config into the setup. From then on every copy is a peer: edit any of them and the others follow.
+- **Fail closed.** If a synced profile changes in a way schrodeck doesn't expect (you deleted it, its deck disappeared, it suddenly references another deck…), that machine drops out of that setup, leaves the profile exactly as it is, tells you once, and waits for `schrodeck resolve`. Profiles that aren't part of a setup are never touched.
 - A small CLI (`schrodeck`, written in Go) runs on every machine from launchd. It runs when profile files or the shared folder change, on a safety timer, or by hand. It can optionally also run on deck attach.
 - Every version of a shared profile is an immutable revision in the shared folder, and each machine writes only its own small "head" file, so no file ever has two writers. Comparing **normalized content hashes** against that history tells each machine whether it is behind, ahead, in sync, or diverged, without trusting file timestamps or clocks. Two machines editing at once produce a visible fork, never a silently lost edit.
 - Behind → plan and verify the change first, quit the app, re-check that nothing changed while it quit, swap in the update, relaunch, and verify. If verification fails, roll back once and stop updating that version until you look at it. Ahead → publish to the shared folder. Diverged → keep both versions, touch nothing, notify once.
 - Per-machine differences such as your home folder, or a service URL that differs on a firewalled machine, are handled with variables, so they never count as edits. It also reports which plugins, icon packs, Shortcuts, and scripts a profile needs and whether this machine has them.
-- Repeated applies back off exponentially, so a bug can't turn into a restart loop; your own edits are never delayed. Deletes never propagate. Alerts are sent once per problem, not once per run.
+- Repeated applies back off exponentially, so a bug can't turn into a restart loop; your own edits are never delayed. Deletes never propagate: deleting a synced profile on one machine just makes that machine drop out of the setup. Alerts are sent once per problem, not once per run.
 - No network connection between the machines is needed. macOS first; the OS-specific parts sit behind interfaces so other platforms can be added later.
 
 ![sync state diagram](docs/sync-states.png)

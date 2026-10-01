@@ -29,19 +29,18 @@ The agent re-evaluates every profile on every run (watcher events and a 15-minut
 |---|---|---|
 | Apply starting (the deck is about to blank) | on | per apply |
 | Apply / push / rollback done | on | per revision |
-| New shared profile available | on | per profile |
+| New setup available (one whose geometry matches a device on this Mac) | on | per setup |
 | Diverged / Forked | on, persistent | (fork, profile, tip set) |
 | BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification", noting that an edit made during the restart is saved in history, + how to inspect ([0008](0008-two-phase-apply.md)) | on, persistent | (blocked, profile, revision) |
 | HoldLocal: "this Mac can't take version X of *<profile>*, so your edit is local only" ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (holdlocal, profile, R revision) |
 | Incoming revision in a profile format this Mac hasn't verified ([0015](0015-schema-guard.md)) | on, persistent | (fingerprint, profile, fingerprint) |
-| Anomaly: the store went backwards for *<profile>* ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (anomaly, profile, R revision) |
+| DETACHED(reason): "this Mac dropped out of *<setup>*: <reason>. Run `schrodeck resolve <setup>`" ([0030](0030-fail-closed-detach.md)). Covers store-went-backwards, store-lost, local-deleted, deck-gone, rebound, foreign-device-id, variable-collision, duplicate, stale-version-edit, apply-recovery, unknown | on, persistent | (detached, setup, reason) |
 | Pending edit from *<host>* on an older schrodeck version, waiting for that host to upgrade ([0027](0027-store-lifecycle.md)) | on | (pending-old, profile, that revision) |
 | A button references another profile that isn't subscribed on this Mac ([0013](0013-sync-scope-and-scripts.md)) | on | (xref, profile, target profile) |
-| Push refused: another host's value found in the profile (collision guard, [0006](0006-normalization-and-variables.md)) | on, persistent | (collision, profile, local hash) |
 | Applied but unverified (`keep`) | on | (kept, profile, revision) |
 | Backoff engaged | on (`notify.on_backoff`) | (backoff, profile) |
 | Missing plugin / script / Shortcut | on | (missing, profile, dependency) |
-| Unshared, store lost, local copy deleted, deck gone | on, persistent | (condition, profile) |
+| Unshared (detached by unshare; resumes on `reshare`) | on, persistent | (unshared, profile) |
 | Reshared: subscriptions on this Mac resumed ([0025](0025-deletion-and-unshare.md)) | on | (reshare, profile, record) |
 | Deck not uniquely identifiable, subscription refused ([0026](0026-profile-identity.md)) | on | (deckkey, profile, deck key hash) |
 | Stuck in flight beyond the alarm threshold | on | (inflight, profile, head set) |
