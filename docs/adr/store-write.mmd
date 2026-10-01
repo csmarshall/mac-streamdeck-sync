@@ -1,0 +1,13 @@
+stateDiagram-v2
+    direction TB
+    [*] --> Stage: local copy is Ahead
+    Stage --> VerifyTmp: write current.tmp-HOST/
+    VerifyTmp --> Abort: re-read hash != L
+    VerifyTmp --> Rename: re-read hash == L
+    Abort --> [*]: remove tmp, log ERROR
+    Rename --> Publish: rename to current/
+    Publish --> ReadTree: current.json written last,<br/>sync client delivers to other hosts
+    ReadTree --> InFlight: tree hash != current.json hash
+    ReadTree --> Usable: tree hash == current.json hash
+    InFlight --> ReadTree: retry next tick, apply nothing
+    Usable --> [*]: continue with ADR 0005
