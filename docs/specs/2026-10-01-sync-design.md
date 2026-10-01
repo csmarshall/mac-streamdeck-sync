@@ -202,5 +202,5 @@ Replicating scripts through a cloud folder means **running code that arrived fro
 
 1. **Is `Device.UUID` the same on every Mac for the same physical deck?** It looks derived from the serial, which would make it portable, but this has not been checked on a second Mac. If it is host-specific, the deck key becomes `Model + serial` read from IOKit.
 2. **Can you edit a deck's profile while that deck is not attached?** If yes, "only the attached Mac pushes" would block real edits, and pushes should be gated on L ≠ B alone.
-3. License (proposed: MIT).
+3. ~~License~~: MIT (decided 2026-10-01).
 4. **Do notifications from an ad-hoc-signed helper app work on macOS 27?** The posting app needs the user's one-time permission. Unverified until a spike posts a real notification on a macOS 27 machine.
