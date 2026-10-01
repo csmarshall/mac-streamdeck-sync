@@ -33,3 +33,7 @@ This works on the Stream Deck app's internal files, which Elgato may change in a
 Not affiliated with or endorsed by Elgato or Corsair. "Elgato" and "Stream Deck" are trademarks of Corsair Memory, Inc.
 
 Human-directed and AI-assisted: the design and every change are reviewed and steered by a human.
+
+## License
+
+[MPL-2.0](LICENSE). Contributions require a CLA; see [CONTRIBUTING.md](CONTRIBUTING.md).
