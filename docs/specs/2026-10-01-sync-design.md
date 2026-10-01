@@ -59,7 +59,7 @@ Configuration has three layers. Each fact has exactly one home:
 repo (public)                      per-Mac, never committed
 ├── sdsync (Python CLI)            ~/.config/mac-streamdeck-sync/config.toml   (store path only, optional)
 ├── launchd/ plist templates       ~/Library/Application Support/mac-streamdeck-sync/
-├── install.sh                       state.json (B hashes per deck), logs, pre-swap backups
+├── install.sh                       state.json (B hashes per deck), logs, history/ (local restore points)
 └── docs/
 ```
 
