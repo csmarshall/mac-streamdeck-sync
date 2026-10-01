@@ -3,17 +3,17 @@ stateDiagram-v2
     [*] --> StageTree: local copy Ahead (or Diverged)
     StageTree --> Abort: re-read digest or hash mismatch
     StageTree --> PublishTree: tmp/HOST/ staged and verified
-    PublishTree --> PublishCommit: rename to trees/DIGEST/HOST/<br/>(own copy only, never trust another host's)
-    PublishCommit --> Confirm: commits/ID/HOST.json written<br/>(JCS bytes, identical from any writer)
+    PublishTree --> PublishRevision: rename to trees/DIGEST/HOST/<br/>(own copy only, never trust another host's)
+    PublishRevision --> Confirm: revisions/ID/HOST.json written<br/>(JCS bytes, identical from any writer)
     Confirm --> Unconfirmed: wait timed out (5 min)<br/>or provider freshness Unknown
-    Confirm --> MoveHead: provider reports tree and commit uploaded
+    Confirm --> MoveHead: provider reports tree and revision uploaded
     Unconfirmed --> MoveHead: move head anyway, status says<br/>pushed, upload unconfirmed
     MoveHead --> SetB: heads/HOST.json rewritten LAST<br/>(only this host writes it)
     SetB --> Reader: local B set only after the head write
     Abort --> [*]: remove tmp, log ERROR, notify
-    Reader --> InFlight: provider not current, or a commit<br/>or the tip tree is missing or fails its digest
+    Reader --> InFlight: provider not current, or a revision<br/>or the tip tree is missing or fails its digest
     Reader --> Forked: live heads don't converge
-    Reader --> Usable: one commit subsumes every live head = R<br/>(equal-hash tips count as converged)
+    Reader --> Usable: one live tip subsumes every live head = R<br/>(by ancestry, equal-hash tips converge)
     InFlight --> Reader: retry next tick, apply nothing
     Forked --> [*]: ADR 0007, wait for resolve
     Usable --> [*]: continue with ADR 0005

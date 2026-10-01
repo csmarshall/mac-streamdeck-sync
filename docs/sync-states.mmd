@@ -1,9 +1,9 @@
 stateDiagram-v2
     direction TB
     [*] --> Fresh: trigger (watcher / timer / CLI / attach)
-    Fresh --> InFlight: provider not current, or a commit<br/>or the tip tree is missing
+    Fresh --> InFlight: provider not current, or a revision<br/>or the tip tree is missing
     Fresh --> Read: store files current
-    Read --> Gate: for each subscribed copy<br/>R from live heads (equal hash = converged)<br/>L = hash(local), B = last synced
+    Read --> Gate: for each subscribed copy<br/>R from live heads by ancestry<br/>(equal-hash TIPS converge, never vs history)<br/>L = hash(local), B = last synced
     Gate --> Stopped: unshared, store lost, local deleted,<br/>deck gone, version mismatch, held, anomaly
     Gate --> Forked: live heads don't converge
     Gate --> Compare: R subsumes every live head and B
@@ -12,12 +12,12 @@ stateDiagram-v2
     Compare --> Ahead: L != B, R equivalent to B
     Compare --> HoldLocal: L != B, R not equivalent to B,<br/>this host BLOCKED or fingerprint unknown
     Compare --> Diverged: L != B, R not equivalent to B
-    Diverged --> Forked: push local edit as its own commit
+    Diverged --> Forked: push local edit as its own revision
     Behind --> Apply: two-phase apply (ADR 0008)
-    Ahead --> Push: tree, commit (parent R),<br/>head written last, then B
+    Ahead --> Push: tree, revision (parent R),<br/>head written last, then B
     Apply --> Blocked: verify failed, rolled back
     Apply --> InSync: verified, head then B := R
-    Push --> InSync: head then B := new commit
+    Push --> InSync: head then B := new revision
     Forked --> Notify: deduplicated alert,<br/>no app files touched
     HoldLocal --> Notify: edit kept local, not pushed
     Blocked --> Notify

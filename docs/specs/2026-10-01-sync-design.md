@@ -39,7 +39,7 @@ One or more Stream Decks are shared between several computers, for example throu
 | **Shared profile** | The unit of sync: one Stream Deck profile (all its pages and folders) that a user opted in with `share`. It has a permanent `profile_id` (ADR [0026](../adr/0026-profile-identity.md)). Unshared profiles are never touched. |
 | **Copy / subscription** | A host's local copy of a shared profile, installed onto one compatible local deck. **Every subscribed copy is kept up to date**, whether or not it is the deck's active profile. |
 | **Store** | The shared cloud folder. Its format is [contract D](../contracts/store-format.md). |
-| **Commit / head** | Each version of a shared profile is an immutable **commit** in the store. Each host owns a **head** naming the commit its copy is at. **R** is the newest commit all heads descend from. |
+| **Revision / head** | Each version of a shared profile is an immutable **revision** in the store: a record of its content hash, its stored tree and its parent revision(s). This is schrodeck's own record in the shared folder, modeled on git's idea but **not** a git commit; in these docs "commit" only ever means git. Each host owns a **head** naming the revision its copy is at. **R** is the newest revision all live heads descend from (equal-content *tips* count as one; history is matched by ancestry only, so an undo to earlier content is a new revision that wins). |
 
 ## Facts the design rests on
 
@@ -83,7 +83,7 @@ host B:  schrodeck reshare <profile_id>             # undo an accidental unshare
 
 The full CLI: `schrodeck init | join | status | sync | share | unshare | reshare | subscribe | unsubscribe | push | pull | resolve | unblock | history | rollback | hold | resume | log | inventory | doctor | config | config resolve | migrate | gc | forget-host | uninstall | agent`. Every command accepts `--json`, which is **the contract for any UI** (contract E, ADR [0018](../adr/0018-runtime-and-architecture.md)).
 
-## Direction: hashes over a commit graph
+## Direction: hashes over a revision graph
 
 ADR [0005](../adr/0005-direction-detection-three-way-hash.md), [0021](../adr/0021-who-may-push.md), [contract D](../contracts/store-format.md).
 
@@ -91,19 +91,19 @@ For each subscribed copy on each host:
 
 ```
 L = hash(normalize(local copy))
-R = the commit that subsumes every live head (none if InFlight or Forked)
-B = (commit, local_hash) this host last synced for this copy
+R = the revision that subsumes every live head (none if InFlight or Forked)
+B = (revision, local_hash) this host last synced for this copy
 ```
 
 The full decision table is in ADR 0005. In short:
 
-- **Freshness first:** if the provider doesn't report the store files as current, or a commit or the tip tree isn't fully delivered → **InFlight** → wait. A store that hasn't been delivered yet is never mistaken for a deleted one.
-- Commits with the same normalized hash are **equivalent**: two hosts that make the identical edit are converged, not forked.
+- **Freshness first:** if the provider doesn't report the store files as current, or a revision or the tip tree isn't fully delivered → **InFlight** → wait. A store that hasn't been delivered yet is never mistaken for a deleted one.
+- **Tips** with the same normalized hash are **equivalent**: two hosts that make the identical edit are converged, not forked. Equivalence is never applied to history, so an undo or rollback to earlier content is a new revision that wins (review F40).
 - L == R → **InSync**.
 - L == B, R moved on → **Behind** → apply.
-- L changed, R ≡ B → **Ahead** → push a commit whose parent is R.
+- L changed, R ≡ B → **Ahead** → push a revision whose parent is R.
 - Both moved, and this host can't take R (BLOCKED, or R's format fingerprint is unknown here) → **HoldLocal** → keep the edit local, notify once; never fork the group over one incompatible host.
-- Both moved otherwise → **Diverged** → push the local edit as its own commit, which makes a visible fork; notify; wait for `resolve`.
+- Both moved otherwise → **Diverged** → push the local edit as its own revision, which makes a visible fork; notify; wait for `resolve`.
 - Live heads don't converge → **Forked** → no host applies anything until `resolve`.
 - R doesn't subsume this host's B (the store went backwards) → **Anomaly** → stop and notify; never read as Behind.
 - Tombstone, lost store, deleted local copy, missing deck, version mismatch → **stop and notify** (ADRs [0025](../adr/0025-deletion-and-unshare.md), [0026](../adr/0026-profile-identity.md), [0027](../adr/0027-store-lifecycle.md)).
@@ -111,9 +111,9 @@ The full decision table is in ADR 0005. In short:
 
 ![sync state diagram](../sync-states.png)
 
-**Why a commit graph:** two hosts pushing from the same base produce two commits with the same parent. Neither overwrites the other, and every host sees the fork. A single shared "current" file would let the last writer silently win (review F1).
+**Why a revision graph:** two hosts pushing from the same base produce two revisions with the same parent. Neither overwrites the other, and every host sees the fork. A single shared "current" file would let the last writer silently win (review F1).
 
-**Timestamps are metadata, never direction.** Commits and heads carry `updated_at` and `updated_by`, shown in `status`, notifications and the log. "This machine is newer than the mount" is put into practice as *changed since the last sync*.
+**Timestamps are metadata, never direction.** Revisions and heads carry `updated_at` and `updated_by`, shown in `status`, notifications and the log. "This machine is newer than the mount" is put into practice as *changed since the last sync*.
 
 ## Normalization and variables
 
@@ -134,11 +134,11 @@ ADR [0006](../adr/0006-normalization-and-variables.md), [contract C](../contract
 - **Collision guard:** a push is refused if the local copy contains another host's value as a literal (e.g. the other Mac's home path baked into an `Open` button).
 - **Changing a variable's value re-materializes** the local copy through the apply, and never pushes by itself. It first checks the copy under the old values: an unpushed edit is pushed first, so re-materializing never overwrites it.
 
-## Applying: plan, commit, verify
+## Applying: plan, revision, verify
 
 ADR [0008](../adr/0008-two-phase-apply.md), [0019](../adr/0019-selected-profile-stays-per-host.md).
 
-Changing the app's files is surgery on a live system. **The app restart is the commit point. Everything that can fail is checked before it, and local state is re-checked once the app can no longer write.**
+Changing the app's files is surgery on a live system. **The app restart is the revision point. Everything that can fail is checked before it, and local state is re-checked once the app can no longer write.**
 
 A run goes:
 1. Pushes.
@@ -169,12 +169,12 @@ Crash recovery follows the journal step: before the swap, discard and restore th
 
 ADR [0009](../adr/0009-store-write-protocol.md), [0023](../adr/0023-store-freshness-via-file-provider.md), [0027](../adr/0027-store-lifecycle.md). The single definition of paths, records and the write protocol is **[contract D](../contracts/store-format.md)**.
 
-- **Every file has exactly one writer**: its path contains the writing host's `host_id`. Identical commits and trees from two hosts are stored once per writer, so even those never share a path. The common `config.toml` is the only exception: rarely written, with `config resolve`.
+- **Every file has exactly one writer**: its path contains the writing host's `host_id`. Identical revisions and trees from two hosts are stored once per writer, so even those never share a path. The common `config.toml` is the only exception: rarely written, with `config resolve`.
 - **No raw device ids in the store:** stored trees hold `{{DEVICE}}` where the app wrote `Device.UUID` (which embeds the deck's USB serial).
-- **Push:** stage and verify the tree → rename it into this host's `trees/<digest>/<host_id>/` (never trusting another host's copy) → write the commit → wait (bounded) for the provider to confirm upload → move this host's head **last** → only then set B.
-- **Read:** a head whose commit, or whose tip tree, is incomplete means InFlight; ordering on the wire doesn't matter.
+- **Push:** stage and verify the tree → rename it into this host's `trees/<digest>/<host_id>/` (never trusting another host's copy) → write the revision → wait (bounded) for the provider to confirm upload → move this host's head **last** → only then set B.
+- **Read:** a head whose revision, or whose tip tree, is incomplete means InFlight; ordering on the wire doesn't matter.
 - **Freshness:** before reading and after writing, ask the provider via File Provider: read only when every file is `current`; a push is confirmed once uploaded. A profile stuck InFlight for more than an hour raises one alarm. The limit: `current` means the newest version *this host knows of*. Observing the `current` state on Dropbox is a gate for M2.
-- **Lifecycle:** `FORMAT` / `norm_version` changes go through an explicit `migrate`, whose rebase commit makes every old head an ancestor, so one stale host can't freeze the upgraded ones; hosts on older versions go read-only. **GC deletes tree copies only; commits are kept forever**, so history can always be walked. `uninstall` never touches profiles.
+- **Lifecycle:** `FORMAT` / `norm_version` changes go through an explicit `migrate`, whose rebase revision makes every old head an ancestor, so one stale host can't freeze the upgraded ones; hosts on older versions go read-only. An edit an old host pushes after `migrate` is reported on every upgraded host as a **pending older-version edit** (never ignored, never a fork), and `migrate` refuses while any profile is Forked (review F42, F43). **GC deletes tree copies only; revisions are kept forever**, so history can always be walked. `uninstall` never touches profiles.
 
 ![store write protocol](../adr/store-write.png)
 
@@ -198,11 +198,11 @@ ADR [0011](../adr/0011-history-and-rollback.md).
 | Ring | Size (default) | Where |
 |---|---|---|
 | Local | `retention.local` = X (20) | `~/Library/Application Support/schrodeck/history/<profile_id>/`, written after the quit before each swap, before rollback/resolve, after each push |
-| Shared | `retention.shared` = Y (20) | the commit chain; commits are kept forever, and GC keeps the **trees** of at least the last Y generations behind every head |
+| Shared | `retention.shared` = Y (20) | the revision chain; revisions are kept forever, and GC keeps the **trees** of at least the last Y generations behind every head |
 
-- `schrodeck rollback <profile> <id>` writes a new commit (kind `rollback`) whose parent is R. Every host converges on it.
+- `schrodeck rollback <profile> <id>` writes a new revision (kind `rollback`) whose parent is R. Every host converges on it.
 - `schrodeck hold <profile>` / `resume <profile>` pause and resume sync of a profile on this host. While held, `rollback --local <id>` applies an old version without publishing it.
-- `schrodeck resolve <profile> --keep …` ends a fork with a commit whose parents are every tip (ADR [0007](../adr/0007-conflict-policy.md)).
+- `schrodeck resolve <profile> --keep …` ends a fork with a revision whose parents are every tip (ADR [0007](../adr/0007-conflict-policy.md)).
 
 ## Deletion, unshare and identity
 
@@ -251,7 +251,7 @@ Elgato publishes a JSON schema for plugin manifests, but **none for profiles** (
 - the key structure at each manifest level;
 - the set of file-name patterns.
 
-**The app version is not part of it**, so a patch update that doesn't change the format doesn't stop sync. When the app updates, the agent recomputes the fingerprint read-only: if it is unchanged, sync continues; if it changed, **pushes and applies both pause** until `schrodeck doctor` passes and the user confirms. `doctor` has a read-only tier (enough for pushing, M2) and a restart tier (launch-rewrite and round-trip probes, required before applying, M3). Each commit records its fingerprint, and the apply plan refuses commits whose fingerprint this host hasn't verified; a local edit to such a profile is held, not pushed.
+**The app version is not part of it**, so a patch update that doesn't change the format doesn't stop sync. When the app updates, the agent recomputes the fingerprint read-only: if it is unchanged, sync continues; if it changed, **pushes and applies both pause** until `schrodeck doctor` passes and the user confirms. `doctor` has a read-only tier (enough for pushing, M2) and a restart tier (launch-rewrite and round-trip probes, required before applying, M3). Each revision records its fingerprint, and the apply plan refuses revisions whose fingerprint this host hasn't verified; a local edit to such a profile is held, not pushed.
 
 ## Notifications
 
@@ -276,7 +276,7 @@ ADR [0017](../adr/0017-observability.md).
 
 ADR [0018](../adr/0018-runtime-and-architecture.md), [0024](../adr/0024-documented-contracts.md).
 
-A **Go** core holds all sync logic: normalization, the commit graph, the store protocol, history, inventory, bindings, variables, backoff and notification dedup. It also holds the CLI and its `--json` output. Everything OS-specific sits behind ports, implemented once per OS as a **connector**:
+A **Go** core holds all sync logic: normalization, the revision graph, the store protocol, history, inventory, bindings, variables, backoff and notification dedup. It also holds the CLI and its `--json` output. Everything OS-specific sits behind ports, implemented once per OS as a **connector**:
 
 - the port list, invariants and filesystem guarantees are [contract A](../contracts/os-connector.md);
 - what each connector assumes about the Stream Deck app is [contract B](../contracts/client-os.md);

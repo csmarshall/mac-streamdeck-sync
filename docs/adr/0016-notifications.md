@@ -1,6 +1,6 @@
 # 0016. Notifications come from our own helper app, deduplicated, with an original icon
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F6, F24; maintainer's dedup requirement): notifications are keyed by condition and sent once on entering it; event table updated.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F6, F24; maintainer's dedup requirement): notifications are keyed by condition and sent once on entering it; event table updated. Revised 2026-10-01 (review round 3: F42, F46): rows for pending older-version edits and unresolved cross-profile references.
 
 ## Context
 
@@ -18,7 +18,7 @@ The agent re-evaluates every profile on every run (watcher events and a 15-minut
 - **Fallback:** `osascript` (generic icon) when the helper is unavailable.
 - **Icon:** an **original** design (a dark tile with a key grid, one accent key, and a circular sync badge). It is generated from code and uses no Elgato marks ([R19](../references.md)).
 - **Deduplication** is part of the notifier design, in the core's notifier layer, so every OS connector gets it ([contract A](../contracts/os-connector.md) `Notifier`):
-  - Each alert has a **key** `(condition, profile_id, version)`, where `version` is the commit or fork tip set involved.
+  - Each alert has a **key** `(condition, profile_id, version)`, where `version` is the revision or fork tip set involved.
   - An alert is sent **once, when the condition is entered**. It is not resent while the condition persists.
   - It is sent again only when the key changes (e.g. a new incoming version is also BLOCKED) or after the condition clears and re-enters.
   - An optional reminder interval (`notify.remind_after`, default **off**) re-sends a still-active persistent alert.
@@ -28,15 +28,17 @@ The agent re-evaluates every profile on every run (watcher events and a 15-minut
 | Event | Default | Key / dedup |
 |---|---|---|
 | Apply starting (the deck is about to blank) | on | per apply |
-| Apply / push / rollback done | on | per commit |
+| Apply / push / rollback done | on | per revision |
 | New shared profile available | on | per profile |
 | Diverged / Forked | on, persistent | (fork, profile, tip set) |
-| BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification", noting that an edit made during the restart is saved in history, + how to inspect ([0008](0008-two-phase-apply.md)) | on, persistent | (blocked, profile, commit) |
-| HoldLocal: "this Mac can't take version X of *<profile>*, so your edit is local only" ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (holdlocal, profile, R commit) |
-| Incoming commit in a profile format this Mac hasn't verified ([0015](0015-schema-guard.md)) | on, persistent | (fingerprint, profile, fingerprint) |
-| Anomaly: the store went backwards for *<profile>* ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (anomaly, profile, R commit) |
+| BLOCKED: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification", noting that an edit made during the restart is saved in history, + how to inspect ([0008](0008-two-phase-apply.md)) | on, persistent | (blocked, profile, revision) |
+| HoldLocal: "this Mac can't take version X of *<profile>*, so your edit is local only" ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (holdlocal, profile, R revision) |
+| Incoming revision in a profile format this Mac hasn't verified ([0015](0015-schema-guard.md)) | on, persistent | (fingerprint, profile, fingerprint) |
+| Anomaly: the store went backwards for *<profile>* ([0005](0005-direction-detection-three-way-hash.md)) | on, persistent | (anomaly, profile, R revision) |
+| Pending edit from *<host>* on an older schrodeck version, waiting for that host to upgrade ([0027](0027-store-lifecycle.md)) | on | (pending-old, profile, that revision) |
+| A button references another profile that isn't subscribed on this Mac ([0013](0013-sync-scope-and-scripts.md)) | on | (xref, profile, target profile) |
 | Push refused: another host's value found in the profile (collision guard, [0006](0006-normalization-and-variables.md)) | on, persistent | (collision, profile, local hash) |
-| Applied but unverified (`keep`) | on | (kept, profile, commit) |
+| Applied but unverified (`keep`) | on | (kept, profile, revision) |
 | Backoff engaged | on (`notify.on_backoff`) | (backoff, profile) |
 | Missing plugin / script / Shortcut | on | (missing, profile, dependency) |
 | Unshared, store lost, local copy deleted, deck gone | on, persistent | (condition, profile) |
@@ -66,7 +68,7 @@ The agent re-evaluates every profile on every run (watcher events and a 15-minut
 
 - The spike (throwaway) showed delivery with the custom icon from `~/Applications` and refusal from a temp dir.
 - Still to be written: an install test that the helper's path is under an Applications directory; a manual first-run checklist item.
-- Dedup test: a BLOCKED condition persisting across 10 simulated runs ⇒ exactly one notification. A new commit that is also BLOCKED ⇒ one more. Known-bad: with dedup disabled, the same test sees 10.
+- Dedup test: a BLOCKED condition persisting across 10 simulated runs ⇒ exactly one notification. A new revision that is also BLOCKED ⇒ one more. Known-bad: with dedup disabled, the same test sees 10.
 
 ## References
 

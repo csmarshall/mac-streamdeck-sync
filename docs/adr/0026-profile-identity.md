@@ -14,8 +14,9 @@ Virtual decks need a physical deck seen within the last 30 days, or they go away
 
 ## Decision
 
-- **`profile_id`** is a random UUIDv4 assigned by `share`, recorded in the write-once `profiles/<profile_id>/profile.json` ([contract D](../contracts/store-format.md)). It never changes. A profile's display name is just content, so renames sync as ordinary edits.
+- **`profile_id`** is a random UUIDv4 assigned by `share`, recorded in the write-once `profiles/<profile_id>/profile.json.<host_id>` ([contract D](../contracts/store-format.md)). It never changes. A profile's display name is just content, so renames sync as ordinary edits.
 - **The sharing host keeps its original folder.** Its local state maps `local folder UUID → (profile_id, deck)`.
+- **Cross-profile references** (a button that switches to another profile by its folder UUID, [contract C](../contracts/profile-format.md) P8, likely, unverified) are translated through the same mapping: stored as the target's `profile_id`, expanded on install to the target's local folder on this host if it is subscribed here, otherwise reported as a dangling dependency ([0013](0013-sync-scope-and-scripts.md), review F46).
 - **Subscribers** install into a new folder named `uuid5(NAMESPACE_SCHRODECK, profile_id + ":" + deck_key)`. The name is deterministic, so a host that loses its local state can rebuild the mapping by recomputing the names. A subscribed copy never reuses an existing local folder.
 - **`deck_key`** is the key of the deck's entry in the app's prefs `Devices` dictionary ([R14](../references.md), observed; [contract A](../contracts/os-connector.md) `DeviceEnumerator.AppDeviceID`), not the manifest's `Device.UUID` (review F31). A deck can only be subscribed onto if its key is **unique** among this host's devices. Virtual decks are observed with the empty id `@(0)[]` ([R12](../references.md)): one virtual deck on a host is fine, but if two devices share a key, `subscribe` refuses to target either of them and says why, rather than letting two copies collide on one folder name.
 - **Where the mapping lives:**

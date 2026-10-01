@@ -7,7 +7,7 @@ Every boundary schrodeck depends on, who owns it, and what catches a break. Deci
 | **A** | OS connector | Go core ↔ an OS connector | us | our releases | conformance suite on each OS's CI | [os-connector.md](os-connector.md) (single source of truth for the port list) |
 | **B** | Client, per OS | OS connector ↔ the Stream Deck app on that OS (paths, prefs, process behavior) | Elgato (observed) | OS + app version | `schrodeck doctor` probes + schema guard | [client-os.md](client-os.md) |
 | **C** | Profile format | Go core ↔ the app's profile files, on any OS | Elgato (observed) | manifest `Version` (+ app version) | `doctor` launch-rewrite and round-trip probes + schema guard | [profile-format.md](profile-format.md) |
-| **D** | Store format | schrodeck ↔ schrodeck across hosts **and across schrodeck versions** | us | the store's `FORMAT` file | readers refuse an unknown `FORMAT`; `norm_version` per commit; fork, in-flight and single-writer tests | [store-format.md](store-format.md) (single definition of store paths, records and the write protocol) |
+| **D** | Store format | schrodeck ↔ schrodeck across hosts **and across schrodeck versions** | us | the store's `FORMAT` file | readers refuse an unknown `FORMAT`; `norm_version` per revision; fork, in-flight and single-writer tests | [store-format.md](store-format.md) (single definition of store paths, records and the write protocol) |
 | **E** | CLI `--json` | Go core ↔ any UI or script | us | a `schema_version` field in every JSON document | golden-file tests on JSON output | currently ADR [0018](../adr/0018-runtime-and-architecture.md). It moves here as `cli-json.md` when the code defines it. |
 
 ## Rules

@@ -4,8 +4,9 @@
 
 - **PUBLIC REPO.** Never commit hostnames, usernames, home paths of real machines, device serials/`Device.UUID` values, plugin tokens, or real profile manifests. Fixtures are redacted by hand. Use `<user>`, `<host>`, `<deck>` placeholders in docs. Run the leak scan before every push (`LICENSE` excluded).
 - **Shared tool vs local overlay.** Repo = the tool, templates, docs. Host identity is derived (hash of IOPlatformUUID + username), never configured. The only per-host config is the store path pointer in `~/.config/schrodeck/config.toml`. Every other setting lives once in `<store>/config.toml`, shared by all hosts. Runtime state lives in `~/Library/Application Support/schrodeck/`. None of it goes in the repo.
-- **Never trust mtime or clocks** for direction. The Stream Deck app rewrites manifests on launch. Direction comes from normalized hashes over the store's commit graph (ADR 0005). Timestamps are display-only metadata.
-- **No store file has two writers** (contract D, `docs/contracts/store-format.md`): write-once trees/commits, per-host heads written last. Never add a shared mutable file to the store. `config.toml` is the only exception.
+- **Never trust mtime or clocks** for direction. The Stream Deck app rewrites manifests on launch. Direction comes from normalized hashes over the store's revision graph (ADR 0005). Timestamps are display-only metadata.
+- **Terminology:** a **revision** is schrodeck's own version record in the store (`revisions/<id>/`). **"Commit" only ever means git.** Never use "commit" for store records in docs, code identifiers, CLI output or logs.
+- **No store file has two writers** (contract D, `docs/contracts/store-format.md`): write-once trees/revisions, per-host heads written last. Never add a shared mutable file to the store. `config.toml` is the only exception.
 - **Deletes never propagate; a failed verify ends in BLOCKED, never a retry loop; alerts are deduplicated** (ADRs 0025, 0008, 0016).
 - **Never touch ProfilesV3 while the app is running.** Plan → journal → quit → **re-check after quit** → snapshot → swap → relaunch → verify (ADR 0008).
 - **Never read or write the selected profile (`ESDProfilesPreferred`) for sync** (ADR 0019). Unshared profiles are never touched (ADR 0004).
@@ -13,7 +14,7 @@
 - Every check gets a known-bad fixture that makes it fail, as well as a known-good one.
 - **The CLI's `--json` output is the contract for any UI.** UIs (e.g. a future SwiftUI menu-bar app) call the CLI. They never reimplement sync logic.
 - **MPL-2.0 Exhibit A header on every source file.** Outside code contributions need a CLA (see CONTRIBUTING.md).
-- Design sources of truth: `docs/adr/` (decisions) and `docs/specs/2026-10-01-sync-design.md` (narrative). Facts about the app are cited from `docs/references.md` as documented vs observed. Diagrams render with `mmdc` and are looked at before commit; `direction TB` only.
+- Design sources of truth: `docs/adr/` (decisions) and `docs/specs/2026-10-01-sync-design.md` (narrative). Facts about the app are cited from `docs/references.md` as documented vs observed. Diagrams render with `mmdc` and are looked at before revision; `direction TB` only.
 
 - "Never written" properties are asserted at the filesystem-port level, not by before/after byte comparison (the running app rewrites its own files).
 - **Contracts (ADR 0024):** five documented contracts in `docs/contracts/`. For ours (A connector, D store format, E `--json`), the code and the doc change in the same PR and breaking changes bump the version. For Elgato's (B client per OS, C profile format), rows change only with evidence: a passing `schrodeck doctor` or a cited source.

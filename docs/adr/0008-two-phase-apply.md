@@ -1,4 +1,4 @@
-# 0008. Applying an update is plan → commit → verify, with a post-quit re-check
+# 0008. Applying an update is plan → revision → verify, with a post-quit re-check
 
 Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18):
 - a post-quit re-check;
@@ -28,12 +28,12 @@ The review found that reading local state only **before** quitting loses edits. 
 
 Two copies of one profile on one host (on two decks) are applied in the same batch, so the app restarts once. Rollback is **all-or-nothing per run**.
 
-**The app restart is the commit point. Everything that can fail is checked before it, and the local state is re-checked after the app has stopped writing.**
+**The app restart is the revision point. Everything that can fail is checked before it, and the local state is re-checked after the app has stopped writing.**
 
 ![apply state diagram](../apply-states.png)
 
 1. **Plan** (the app still runs, and nothing is touched). Abort on any failure:
-   - For each target: the incoming commit's `fingerprint` is in this host's known-good set, and its `norm_version` matches ([0015](0015-schema-guard.md), [0006](0006-normalization-and-variables.md)).
+   - For each target: the incoming revision's `fingerprint` is in this host's known-good set, and its `norm_version` matches ([0015](0015-schema-guard.md), [0006](0006-normalization-and-variables.md)).
    - The target is not BLOCKED for this R (below).
    - Stage each target in a scratch dir on the same volume. Placeholders are expanded with this host's values, `Device.UUID` is set to the receiving deck, and the folder is named per [0026](0026-profile-identity.md). The staged copy must re-hash to `hash(R)`.
    - Geometry matches ([0003](0003-decks-are-local-geometry-compatibility.md)).
@@ -55,9 +55,9 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
      3. Set a durable **BLOCKED(R)** in local state for that profile.
      4. Notify, deduplicated: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification. If you edited this profile while Stream Deck was restarting, your edit is saved in history. See `schrodeck status <profile>`."
 
-     A verify failure can't always be told apart from a user edit made during the relaunch-and-settle window (review F33): both show up as L ≠ hash(R). So the post-apply tree saved in sub-step 1 is a first-class history entry, and `schrodeck resolve <profile> --push-post-apply` publishes it as an ordinary edit commit (parent R), which also clears BLOCKED(R). `status` shows the key paths that differed, so the user can tell an app repair from their own change.
+     A verify failure can't always be told apart from a user edit made during the relaunch-and-settle window (review F33): both show up as L ≠ hash(R). So the post-apply tree saved in sub-step 1 is a first-class history entry, and `schrodeck resolve <profile> --push-post-apply` publishes it as an ordinary edit revision (parent R), which also clears BLOCKED(R). `status` shows the key paths that differed, so the user can tell an app repair from their own change.
 
-     While BLOCKED(R), the profile isn't applied again until R changes (a new commit) or the user runs `schrodeck resolve`/`schrodeck unblock`. It is not retried on a timer.
+     While BLOCKED(R), the profile isn't applied again until R changes (a new revision) or the user runs `schrodeck resolve`/`schrodeck unblock`. It is not retried on a timer.
    - **`keep`:** leave the applied files in place, set B := (R, L_actual), and flag the copy "applied, unverified". Because `B.local_hash` is the observed hash, the copy is neither Ahead (the app's repair isn't pushed) nor Behind (no re-apply loop). It is reported in `status` and notified once.
 
 **Crash recovery** (a journal exists at the start of a run). The rule depends on the recorded step, and recovery always goes through Quit and Verify:
@@ -74,7 +74,7 @@ The selected profile per deck is never touched ([0019](0019-selected-profile-sta
 - Good: a broken incoming version costs one restart and one rollback per host, not one per hour.
 - Good: applies to inactive subscribed copies too ([0004](0004-shared-profiles-and-subscriptions.md)).
 - Bad: every apply restarts the app, so the deck blanks for a few seconds. Accepted by the project owner ("always auto").
-- Bad: BLOCKED needs a person to clear it, unless a new commit arrives. That is intentional.
+- Bad: BLOCKED needs a person to clear it, unless a new revision arrives. That is intentional.
 - Risk: the settle heuristic (process up, files quiet) is observed behavior, not a documented signal. A too-short window can verify before the app's own rewrite. The launch-rewrite probe ([contract C](../contracts/profile-format.md) P4) measures the needed window per app version.
 - Risk: quitting via AppleScript depends on the app honoring the quit event ([contract B](../contracts/client-os.md) M3).
 

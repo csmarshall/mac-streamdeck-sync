@@ -4,7 +4,7 @@ Status: Accepted 2026-10-01. Revised 2026-10-01 (review F21, F24): the `current`
 
 ## Context
 
-The store protocol (ADR [0009](0009-store-write-protocol.md), [contract D](../contracts/store-format.md)) detects a push that is **half delivered**: a head whose commit or tree isn't fully present. It can't detect a push that hasn't been **delivered at all**, where another host pushed and this host's sync client hasn't fetched it yet. It also can't tell whether our own push has reached the cloud.
+The store protocol (ADR [0009](0009-store-write-protocol.md), [contract D](../contracts/store-format.md)) detects a push that is **half delivered**: a head whose revision or tree isn't fully present. It can't detect a push that hasn't been **delivered at all**, where another host pushed and this host's sync client hasn't fetched it yet. It also can't tell whether our own push has reached the cloud.
 
 Apple's File Provider framework exposes per-file sync state as URL resource values. On current macOS, Dropbox and iCloud Drive are observed to use it. Google Drive and OneDrive are **expected** to, but that is **unverified**.
 
@@ -15,7 +15,7 @@ Before **reading** a profile from the store and after **writing** it, query thes
 | Key | Used for |
 |---|---|
 | `ubiquitousItemDownloadingStatus` | Read only when every file is `current`. `downloaded` (possibly stale) or `notDownloaded` (an online-only placeholder) → request the download and treat the profile as **InFlight**: no apply this tick. |
-| `ubiquitousItemIsUploaded` / `IsUploading` | A push is **confirmed** only when its tree and commit are uploaded. Until then, `status` says "pushed, not yet uploaded". |
+| `ubiquitousItemIsUploaded` / `IsUploading` | A push is **confirmed** only when its tree and revision are uploaded. Until then, `status` says "pushed, not yet uploaded". |
 | `ubiquitousItemHasUnresolvedConflicts` | The provider has made a conflict copy of a schrodeck file. Under contract D's single-writer rule this should never happen for profile data, so it is reported as an error (and as a `config.toml` conflict when it's that file). |
 
 - The store directory should be **kept downloaded**. `init` and `join` request it, and `doctor` warns if the provider has evicted it.

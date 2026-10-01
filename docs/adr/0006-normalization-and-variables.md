@@ -1,6 +1,6 @@
 # 0006. Normalization (for hashing only) and per-host variables
 
-Status: Accepted 2026-10-01 (variables in v1). Revised 2026-10-01 (review F3, F4, F8, F9): the store holds full trees; normalization is used only for hashing; substitution is path-boundary-aware; `norm_version` added; variable changes never push. Revised 2026-10-01 (review round 2: F3, F27, F29): a wider boundary set, `Device.UUID` stored as `{{DEVICE}}`, and re-materialization checks for unpushed edits under the old values first.
+Status: Accepted 2026-10-01 (variables in v1). Revised 2026-10-01 (review F3, F4, F8, F9): the store holds full trees; normalization is used only for hashing; substitution is path-boundary-aware; `norm_version` added; variable changes never push. Revised 2026-10-01 (review round 2: F3, F27, F29): a wider boundary set, `Device.UUID` stored as `{{DEVICE}}`, and re-materialization checks for unpushed edits under the old values first. Revised 2026-10-01 (review F46): `{{DEVICE}}` substitution is value-based, anywhere in the tree; a foreign device id refuses the push.
 
 ## Context
 
@@ -22,9 +22,10 @@ Some fields change at runtime with no edit: action `State` and `Pages.Current` (
 | Stored tree | `trees/<digest>/<host_id>/` in the store ([contract D](../contracts/store-format.md)) | the **full** tree as the app wrote it, with variable values replaced by placeholders and every `Device.UUID` value replaced by the reserved `{{DEVICE}}`. Runtime fields are kept. No raw device id (which embeds the deck's USB serial, [R9](../references.md)) ever reaches the store. |
 | Normalized form | in memory only | the stored form minus the strip list, JCS-canonicalized; used **only** to compute `hash` |
 
+- **`{{DEVICE}}` is value-based** (review F46). When a tree is put into placeholder form, **every occurrence of this copy's own deck id string, anywhere in the tree** (the top-level `Device.UUID`, and any action setting that embeds it), becomes `{{DEVICE}}`, using the same path-boundary rules as other variables. Any *other* device-id-shaped value left afterwards (`@(` …) is a different deck's id: the push is refused and the inventory reports it, because it would leak a serial and point at the wrong deck on other hosts.
 - **Install** = take the stored tree, expand placeholders with this host's values, expand `{{DEVICE}}` to the receiving deck's id, and name the folder per [0026](0026-profile-identity.md). That is close to a byte-copy, so we depend as little as possible on the app tolerating fields we invented.
 - **The exact hash definition and the file allow-list live in [contract C § normalized hash](../contracts/profile-format.md#normalized-hash).** The strip list is one named constant there.
-- **`norm_version`:** every commit records the normalization version it was hashed under. Hashes are compared only under the same `norm_version`. Changing normalization means a `FORMAT` migration ([0027](0027-store-lifecycle.md)): B is re-based without pushing, and hosts on an older version go read-only instead of looping.
+- **`norm_version`:** every revision records the normalization version it was hashed under. Hashes are compared only under the same `norm_version`. Changing normalization means a `FORMAT` migration ([0027](0027-store-lifecycle.md)): B is re-based without pushing, and hosts on an older version go read-only instead of looping.
 
 **Variables (v1):**
 
@@ -35,7 +36,7 @@ Some fields change at runtime with no edit: action `State` and `Pages.Current` (
 - **A variable-value change never pushes by itself.** Each copy's local state records the variable values it was last materialized with (`vars_used`). When this host's values change, the next run:
   1. computes L **under `vars_used`** (the old values), so the old literals canonicalize to placeholders exactly as before;
   2. if that L ≠ B.local_hash, the copy has an unpushed edit: **push it first** (canonicalized under the old values), so the edit is never overwritten (review F29);
-  3. then **re-materializes** the copy: re-installs the stored tree of the (now current) B commit with the new values, through the normal two-phase apply ([0008](0008-two-phase-apply.md)), and records the new `vars_used`.
+  3. then **re-materializes** the copy: re-installs the stored tree of the (now current) B revision with the new values, through the normal two-phase apply ([0008](0008-two-phase-apply.md)), and records the new `vars_used`.
 
   B's tree is **pinned** against GC while a re-materialization is pending ([contract D § garbage collection](../contracts/store-format.md#garbage-collection-trees-only)). Without step 1, old literals would look like an edit and be pushed as literals (review scenario 3).
 

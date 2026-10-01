@@ -12,7 +12,7 @@ The direction table ([0005](0005-direction-detection-three-way-hash.md)) origina
   - stops syncing that profile;
   - **keeps its local copy, detached** (it becomes an ordinary local profile), but remembers the subscription as *detached by unshare*;
   - notifies once ([0016](0016-notifications.md)).
-- **`schrodeck reshare <profile_id>`** (on any host) undoes an accidental unshare (owner's decision). It appends a reshare record to this host's `reshares/<host_id>.json` that **supersedes** every tombstone record it has seen. The profile keeps its `profile_id` and its full commit history. Hosts whose subscriptions were *detached by unshare* **resume** automatically:
+- **`schrodeck reshare <profile_id>`** (on any host) undoes an accidental unshare (owner's decision). It appends a reshare record to this host's `reshares/<host_id>.json` that **supersedes** every tombstone record it has seen. The profile keeps its `profile_id` and its full revision history. Hosts whose subscriptions were *detached by unshare* **resume** automatically:
   - a copy left untouched while detached is InSync or Behind and simply catches up;
   - a copy edited while detached is Ahead or Diverged under the normal rules ([0005](0005-direction-detection-three-way-hash.md)), so nothing is lost.
 

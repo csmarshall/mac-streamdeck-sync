@@ -1,6 +1,6 @@
 # 0028. Distribution: a Homebrew tap now, a signed `.pkg` later
 
-Status: Accepted 2026-10-01 (Homebrew tap). The `.pkg` part is **Deferred** until there is an Apple Developer ID. Revised 2026-10-01 (review round 2: F35, F36, F37, F38): an explicit auto-merge trust boundary with provenance checks, jobs chained on release-please's output, generated workflows pinned, and the agent installed by `init`/`join` only.
+Status: Accepted 2026-10-01 (Homebrew tap). The `.pkg` part is **Deferred** until there is an Apple Developer ID. Revised 2026-10-01 (review round 2: F35, F36, F37, F38): an explicit auto-merge trust boundary with provenance checks, jobs chained on release-please's output, generated workflows pinned, and the agent installed by `init`/`join` only. Revised 2026-10-01 (review F41): attestation pinned to the release workflow and a release tag; the guard runs as `pull_request_target` on trusted base code; the App never holds the `workflows` permission.
 
 ## Context
 
@@ -38,7 +38,7 @@ stateDiagram-v2
     ReleasePR --> Release: maintainer merges the release PR<br/>(version bump + CHANGELOG, generated)<br/>release-please creates tag + Release
     Release --> Build: same workflow, gated on release_created<br/>builds tarball + checksums, attests provenance
     Build --> BumpTap: tap-scoped GitHub App opens a PR<br/>changing only url + sha256
-    BumpTap --> TapCI: tap CI recomputes sha256,<br/>gh attestation verify, brew test-bot
+    BumpTap --> TapCI: guard on trusted base code recomputes sha256,<br/>verifies attestation (pinned workflow + tag),<br/>brew test-bot runs unprivileged
     TapCI --> Held: any check red, or diff touches more<br/>than url + sha256, or url not a schrodeck release
     TapCI --> Published: all green, bot-authored, diff limited<br/>auto-merge into the protected main
     Held --> [*]: PR stays open, maintainer notified
@@ -47,14 +47,16 @@ stateDiagram-v2
 
 1. **Versioning and changelog:** a release-please-style action reads the conventional commit messages the repo already uses (`feat(#n):`, `fix(#n):`). It keeps one open "release PR" that bumps the version and writes the CHANGELOG. Merging that PR is the only manual step. release-please then creates the tag and the GitHub Release.
 2. **Build artifacts, chained, not tag-triggered** (review F36): a tag or release created with the default `GITHUB_TOKEN` does **not** trigger other `on: push: tags` / `on: release` workflows. So the build runs as later jobs in the **same** release-please workflow run, gated on its `release_created` output (the alternative is to have release-please use a GitHub App token, whose events do trigger workflows). These jobs build the source tarball and checksums, run the full test suite on macOS one last time, attach the artifacts to the Release, and create a **build-provenance attestation** for the tarball with GitHub's artifact-attestation action.
-3. **Tap update:** a **GitHub App installed only on `csmarshall/homebrew-tap`** (preferred over a PAT, because its scope and lifetime are narrower), with contents and pull-request write permission on that one repo, opens a PR that changes **only** the formula's `url` and `sha256`. The formula's build steps are written once, by hand, and only the version pointer changes per release.
+3. **Tap update:** a **GitHub App installed only on `csmarshall/homebrew-tap`** (preferred over a PAT, because its scope and lifetime are narrower), with contents and pull-request write permission on that one repo, and **never the `workflows` permission** (so even a stolen App token can't change any workflow, including the guard; review F41), opens a PR that changes **only** the formula's `url` and `sha256`. The formula's build steps are written once, by hand, and only the version pointer changes per release.
 4. **Tap CI and the auto-merge trust boundary** (review F35). The tap repo's `main` is **protected**: changes only by PR, required status checks, no direct pushes, including by the App. The bump PR auto-merges only if **all** of these hold, checked by a workflow in the tap repo (not by the release workflow, which is the thing being guarded against):
    - the PR was opened by the release App's bot account;
    - its diff touches only the `url` and `sha256` lines of the formula;
    - `url` matches `https://github.com/csmarshall/schrodeck/releases/download/v*`;
    - CI downloads that URL and **recomputes** the sha256 (it must equal the PR's value);
-   - `gh attestation verify` confirms the tarball was built by the schrodeck repo's release workflow;
+   - `gh attestation verify` confirms the tarball was built by **the** release workflow from **a release tag**, not merely by something in the repo (review F41): the signer workflow is pinned (`--signer-workflow csmarshall/schrodeck/.github/workflows/release.yml`) and the source ref must be the tag `refs/tags/v<version>` matching the PR's `url`. Exact flag names are confirmed when the actions are pinned in the plan;
    - `brew test-bot` (the workflows `brew tap-new` generates) builds the formula from source on macOS and runs its test.
+
+   **Where the guard runs** (review F41): the policy checks (author, diff, `url`, recomputed `sha256`, attestation) run in a `pull_request_target` workflow that checks out **only the tap's protected base branch** and reads the PR's diff and metadata through the API. A PR can't change the code that judges it, because `pull_request_target` runs the base branch's workflow file, and the job never checks out or executes PR content. Only this job holds the merge permission. `brew test-bot` builds the PR's formula in a separate, unprivileged `pull_request` workflow with no secrets, whose result is a **required status check**. CODEOWNERS review on `.github/` was the alternative; it was rejected as the primary control because it relies on a human noticing, while the base-only guard holds regardless. It is still enabled as defense in depth for human-authored PRs.
 
    Anything else leaves the PR open for a human and notifies the maintainer. A compromised release job or App token can therefore at worst open a PR that a human must read; it can't ship a tarball that wasn't built by the release workflow from this repo.
 5. **The formula's test** (review F36) runs on a CI runner with no Stream Deck app. It asserts only that `schrodeck --version` prints the formula's version, and that `schrodeck doctor --json` exits with the documented "app not installed" status and emits JSON that validates against the `doctor` schema ([contract E](../contracts/README.md)). It never asserts a passing doctor.
@@ -84,7 +86,7 @@ stateDiagram-v2
 
 No check yet; to be written in the plan:
 - CI on a macOS runner: `brew install --build-from-source` of the formula from the tap, then `brew test schrodeck`, asserting only the version string and the JSON shape and exit status of `doctor --json` without the app. Known-bad: a formula with a broken build step must fail CI.
-- **Trust-boundary tests** on the tap's guard workflow, each of which must leave the PR unmerged: a bump PR from a non-bot author; a diff that also edits the `install` block; a `url` outside `csmarshall/schrodeck/releases/download/v*`; a `sha256` that doesn't match the downloaded tarball; a tarball without a valid attestation. Known-good: a genuine bump auto-merges.
+- **Trust-boundary tests** on the tap's guard workflow, each of which must leave the PR unmerged: a bump PR from a non-bot author; a diff that also edits the `install` block; a `url` outside `csmarshall/schrodeck/releases/download/v*`; a `sha256` that doesn't match the downloaded tarball; a tarball without a valid attestation; a tarball attested by a **different workflow** in the repo, or built from a branch instead of a release tag; a PR that also edits `.github/workflows/` (the guard that runs must be the base branch's, and the diff check rejects it). Known-good: a genuine bump auto-merges.
 - A release dry run confirms the build jobs actually run after release-please creates the release (the F36 trap: if they were tag-triggered with the default token, this run would produce no artifacts).
 - An install-then-check test: after `brew install`, no LaunchAgent exists until `join` succeeds.
 - Release pipeline dry run: a pre-release (`v0.0.1-rc1`) goes all the way to a tap bump PR. Known-bad: a deliberately broken formula bump must stay unmerged.

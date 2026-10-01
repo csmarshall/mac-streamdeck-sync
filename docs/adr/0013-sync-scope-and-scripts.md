@@ -1,6 +1,6 @@
 # 0013. Sync scope: profiles and icon packs; scripts are inventoried, replicated only by opt-in
 
-Status: Accepted 2026-10-01
+Status: Accepted 2026-10-01 Revised 2026-10-01 (review F46): cross-profile references are an inventory dependency.
 
 ## Context
 
@@ -13,7 +13,8 @@ Buttons depend on things outside the profile: icon packs, scripts and apps opene
   - file paths from `Open` actions, checked to exist and be executable after variable expansion;
   - Shortcuts, checked against `shortcuts list`;
   - BetterTouchTool trigger ids, reported only;
-  - plugin-backed actions ([0014](0014-plugin-handling.md)).
+  - plugin-backed actions ([0014](0014-plugin-handling.md));
+  - **cross-profile references** (review F46): buttons that switch to another profile by its folder UUID ([contract C](../contracts/profile-format.md) P8, likely, unverified). Receivers name folders by uuid5 ([0026](0026-profile-identity.md)), so a reference to another *shared* profile is rewritten on install to that profile's local folder on this host, when it is subscribed here. If the target isn't subscribed on this host (or isn't shared at all), the inventory warns and one deduplicated notification names the button: the button will do nothing until the target is subscribed.
 - **Script replication is opt-in per path** in the common config: `managed-elsewhere` (report only, e.g. a dotfiles repo) or `store` (copied from `<store>/scripts/`). Replicated scripts carry a hash that is checked before they are installed.
 
 ## Consequences
@@ -31,6 +32,7 @@ Buttons depend on things outside the profile: icon packs, scripts and apps opene
 
 No check yet; to be written in the plan:
 - A missing-path fixture ⇒ an inventory warning.
+- A switch-profile fixture whose target is shared and subscribed ⇒ the reference is rewritten to the local uuid5 folder; whose target isn't subscribed ⇒ one warning and one notification. Known-bad: with rewriting disabled, the subscribed case must report a dangling reference.
 - A replicated script with a tampered byte ⇒ refused.
 
 ## References

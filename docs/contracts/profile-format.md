@@ -17,6 +17,7 @@ Index of all contracts: [README.md](README.md).
 | P5 | Action settings are plain JSON inside the page manifest; global plugin settings are not in profiles | documented [R7](../references.md) | none needed (documented) |
 | P6 | `Open` actions store absolute paths in `Settings.path` | observed [R16](../references.md) | report any absolute path outside `{{HOME}}` |
 | P7 | Every file in a profile matches the allow-list below | observed | an unexpected file inside a profile folder trips the schema guard: a new file type means the format changed |
+| P8 | Actions that switch to or open **another profile** (e.g. a switch-profile action) reference the target by that profile's **folder UUID**, and may also embed a device id | **likely, unverified** (review F46) | scan action settings for UUID-shaped values that match another local `.sdProfile` folder name, and for `@(` device ids. Report each reference with its key path. A matched profile reference is an inventory dependency (ADR [0013](../adr/0013-sync-scope-and-scripts.md)); a device id other than this copy's own refuses the push (ADR [0006](../adr/0006-normalization-and-variables.md)) |
 
 ## File allow-list
 
