@@ -31,10 +31,10 @@ erDiagram
 | **Profile** | a complete button layout for **one** device | the `.sdProfile` folder UUID (local to the computer) | observed [R2] |
 | **Page** | one screen of a profile; a profile has an ordered list of pages | a page UUID folder under `Profiles/` | observed [R2] |
 | **Folder** | a button that opens a sub-page; stored as another page folder in the same profile | page UUID | observed (structure); exact folder-vs-page encoding **unknown** (probe P9 below) |
-| **Action** | what one key or dial does: plugin, settings, title, icon, states | its slot position on the page (e.g. `3,1`) | observed [R2]; settings format documented [R7] |
+| **Action** | what one key or dial does: plugin, settings, title, icon, states | its slot position on the page (`col,row`, e.g. `3,1`) **and** a per-instance `ActionID` that changes when copied | observed [R2, R20]; settings format documented [R7] |
 | **Plugin** | code implementing actions; installed per computer; its global settings are per computer | plugin UUID (e.g. `com.elgato.…`) | documented [R6, R7] |
 | **Selected profile** | the profile a device currently shows | stored **per device** in the app's preferences, not in the profile | observed [R14] |
-| **Smart profile** | a profile that switches in when a given application is focused | `AppIdentifier` in the profile manifest (**meaning unclear**; see U3) | documented [R13] (feature); encoding unknown |
+| **Smart profile** | a profile that switches in when a given application is focused | `AppIdentifier` in the profile manifest. Observed values: **absent** (the XL's profile) and **`"*"`** (two other default profiles), which probably means "any application". A real smart profile presumably holds an app identifier (U3) | documented [R13] (feature); encoding partly observed |
 
 ## Cardinalities
 
@@ -45,7 +45,7 @@ erDiagram
 | Device → Profiles | **1 → N** (a device can have many profiles; on the observed Mac each has exactly one) | observed + documented (profiles are created per device in the app's UI) |
 | **Profile → Device** | **N → 1, exactly one.** A profile's manifest names exactly one `Device` (model + key). A profile is never shared between two devices, not even two of the same type | observed [R9] on every profile |
 | Device → Selected profile | **1 → 0..1** | observed [R14]; the virtual deck's selected id points to a profile that **doesn't exist on disk** (U4) |
-| Profile → Pages | **1 → 1..N**, ordered | observed |
+| Profile → Pages | **1 → 1..N**, ordered: `Pages.Pages` lists the user's pages in order, `Pages.Current` is the page last shown (runtime), and `Pages.Default` points to a separate **empty** page that is never in the list | observed on all 3 profiles |
 | Profile → its "Default" page entry | **1 → 1**: every observed profile has one extra page folder with **0** actions that the manifest's `Pages.Default` points to | observed; **meaning unknown** (U2) |
 | Page → Actions | **1 → 0..(columns × rows [+ dials])** | observed; the bound is from geometry [R8] |
 | Action → Plugin | **N → 0..1** (built-ins like Open/Hotkey are `com.elgato.streamdeck.system.*`) | observed |
@@ -59,6 +59,21 @@ erDiagram
 | Same device type, different physical deck (XL → another XL) | Import lets you choose the target device (6.5+). On disk the copy differs only in `Device.UUID` | documented (choose device on import [R10]); same-type copy = rewriting `Device.UUID` is **observed by design, not yet probed** (contract B M4 round-trip) | **Yes.** This is exactly how a setup reaches another computer's XL (`{{DEVICE}}`, ADR [0006](adr/0006-normalization-and-variables.md)) |
 | Different device type (XL 8×4 → Stream Deck 5×3) | **Unknown.** Elgato says profiles are device-specific ("layouts and button mappings differ across models") and the Marketplace lists which units a profile "supports" | documented that profiles are device-specific [R10]; cross-type import behavior **unknown** (U1) | **No, not in v1.** Geometry must match (ADR [0003](adr/0003-decks-are-local-geometry-compatibility.md)). Cross-geometry re-flow is a possible future feature |
 | Virtual deck ↔ physical deck | Virtual decks have user-chosen geometry (up to 8×8) | documented [R12] | Same rule: allowed only if the geometry matches exactly |
+
+## What a copy changes (and what it doesn't)
+
+On the observed Mac, the same page exists in two profiles (a Stream Deck profile and an XL profile). Comparing them [R20, R21](references.md):
+
+| Part | Same in both copies? |
+|---|---|
+| Which plugin action sits at which `col,row` | **yes** |
+| Action settings, titles, states (except image references) | **yes** |
+| Image bytes | **yes** |
+| Each action's `ActionID` | **no**: new per copy |
+| Image file names (`Images/<id>.png`) | **no**: new per copy |
+| Position on the bigger deck | kept as-is (top-left), no re-flow |
+
+Consequence for schrodeck: "the same setup" has to mean **the same content**, not the same ids. The hash ignores `ActionID` and compares images by content, so two independently made identical setups are recognized as identical (contract C hash definition, P9).
 
 ## Layout combinations schrodeck has to handle
 
@@ -75,10 +90,11 @@ erDiagram
 
 | id | Unknown | Probe |
 |---|---|---|
-| U1 | What the app does when you import a profile made for a **different device type** (refuse, re-flow, truncate?) | Manual, throwaway: export a small Mini profile, import it onto the XL, inspect the result on disk. Record in [references.md](references.md). Doesn't block v1 (we refuse cross-geometry anyway) |
+| U1 | What the app does when a profile/page made for a **different device type** is imported or copied. **Partly answered** [R21](references.md): a smaller layout on a bigger deck keeps its `col,row` coordinates (top-left, no re-flow). Bigger onto smaller is still unknown (refuse? truncate?) | Manual, throwaway: copy an XL page with buttons beyond column 4 onto the 5×3 deck and inspect the result on disk. Doesn't block v1 (we refuse cross-geometry anyway) |
 | U2 | What the 0-action page folder that `Pages.Default` points to is (an empty start page? a template?) | Create a fresh profile in the app, diff before/after; check whether `Default` changes when pages are reordered. Contract C row |
 | U3 | What `AppIdentifier` means. It appears on two "Default Profile"s, so it may not mean "smart profile" | Create a smart profile linked to one app, diff the manifest; compare with a plain profile. Contract C row |
 | U4 | Why the virtual deck's selected profile id has no folder on disk (lazy creation?) | Open the virtual deck in the app, check whether the folder appears |
+| U6 | Whether two profiles on one Mac may share `ActionID`s (a verbatim copy of one setup onto two same-size decks) | contract C P10 |
 | U5 | Whether several virtual decks share `@(0)[]` or get distinct keys | Create a second virtual deck, read the prefs `Devices` keys |
 | P9 | How a folder button encodes its target page (the page UUID in action settings?) | Already covered by contract C P8 (profile-reference probe) |
 
