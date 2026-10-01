@@ -21,10 +21,13 @@ You edit a profile on Mac A, flip the switch, and Mac B shows yesterday's layout
 ## Prior art
 
 - [dominik-ba/stream-deck-profile-sync](https://github.com/dominik-ba/stream-deck-profile-sync): manual push/pull via a cloud folder. A good fit if you want to stay in control of when syncs happen.
+- What Elgato documents vs. what we observed: [docs/references.md](docs/references.md)
 - [Elgato: deploying profiles at scale](https://www.elgato.com/us/en/explorer/products/stream-deck/stream-deck-profiles-at-scale/). Note that Elgato does not officially support managing profile files directly. This tool therefore checks the app version and profile schema, and refuses to run on anything it doesn't recognize.
 
 ## Caveats
 
 This works on the Stream Deck app's internal files, which Elgato may change in any update. It keeps backups before every change and is designed to stop rather than guess. Hopefully that is enough, but treat it as early software.
+
+Not affiliated with or endorsed by Elgato or Corsair. "Elgato" and "Stream Deck" are trademarks of Corsair Memory, Inc.
 
 Human-directed and AI-assisted: the design and every change are reviewed and steered by a human.

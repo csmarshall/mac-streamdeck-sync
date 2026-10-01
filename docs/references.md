@@ -1,0 +1,27 @@
+# References: what Elgato documents vs. what we observed
+
+ADRs cite this file by row id (e.g. `[R3]`). **Documented** = Elgato states it. **Observed** = we verified it on a real machine but Elgato does not promise it, so it may change in any app update and the schema guard (ADR 13) must catch that. Checked 2026-10-01, Stream Deck 7.5.1, macOS 27.
+
+| id | Topic | Status | Source | What it says / what we saw |
+|---|---|---|---|---|
+| R1 | App data root `~/Library/Application Support/com.elgato.StreamDeck` | Documented | [Deploying profiles at scale](https://www.elgato.com/us/en/explorer/products/stream-deck/stream-deck-profiles-at-scale/) | Names this folder (and `ProfilesV2`, `Backup`). |
+| R2 | `ProfilesV3/<uuid>.sdProfile` + per-page `manifest.json` | **Observed** | n/a | Elgato documents only `ProfilesV2`. The V3 layout is inferred from disk. |
+| R3 | File-level profile management is unsupported | Documented | [Deploying profiles at scale](https://www.elgato.com/us/en/explorer/products/stream-deck/stream-deck-profiles-at-scale/) | "not officially supported and may break with future software updates" (current as of 7.0); "Close Stream Deck software" first. |
+| R4 | Full backup restore overwrites everything | Documented | [Backup & restore](https://help.elgato.com/hc/en-us/articles/360048424432) | "Importing a backup will overwrite existing profiles"; automatic backups since 5.3. |
+| R5 | Single-profile export `.streamDeckProfile` | Documented | [Import profiles](https://help.elgato.com/hc/en-us/articles/33556495589905) | Install by opening the file. There is no CLI. |
+| R6 | Exports exclude plugins | Documented | [Backup & restore](https://help.elgato.com/hc/en-us/articles/360048424432) | "do not contain copies of your plugins". |
+| R7 | Plugin global settings are machine-local | Documented | [SDK: Settings](https://docs.elgato.com/streamdeck/sdk/guides/settings) | Action settings are plain-text and exported; global settings "are stored securely on the user's local machine". |
+| R8 | Device types and key-grid sizes | Documented | [SDK: Devices](https://docs.elgato.com/streamdeck/sdk/guides/devices) | DeviceType enum (Stream Deck, Mini, XL, +, Neo, + XL, Virtual, …) with columns × rows. Model compatibility is derived from this. |
+| R9 | Device ID stability | **Observed** | [SDK: plugin events](https://docs.elgato.com/streamdeck/sdk/references/websocket/plugin/) | The SDK calls `device` only a "Unique identifier". On disk, `Device.UUID` = `@(1)[vendor/product/usb-serial]`, and it contains the IOKit USB serial (verified for one deck on one Mac; see issue #1). |
+| R10 | Profiles are device-specific | Documented | [Deploying profiles at scale](https://www.elgato.com/us/en/explorer/products/stream-deck/stream-deck-profiles-at-scale/); [6.5 release notes](https://help.elgato.com/hc/en-us/articles/22500155667469) | "layouts and button mappings differ across models". Since 6.5 you can choose the target device when importing. |
+| R11 | Disconnected devices stay editable | Documented | [SDK: Devices](https://docs.elgato.com/streamdeck/sdk/guides/devices) | "keys/encoders can still be visible in the Stream Deck app while the hardware is disconnected". This bears on proposed ADR P1 / issue #2. |
+| R12 | Virtual Stream Deck | Documented | [Virtual Stream Deck](https://help.elgato.com/hc/en-us/articles/35492041288337) | Up to 8×8; each has "unique settings"; needs a physical deck seen within 30 days. On disk its ID is `@(0)[]` (no serial). |
+| R13 | Smart (app-linked) profiles | Documented | [Smart Profiles](https://help.elgato.com/hc/en-us/articles/360053419071) | Switch on the focused app; "deactivated" while the Stream Deck window is open. |
+| R14 | Selected profile per device | **Observed** | n/a | `~/Library/Preferences/com.elgato.StreamDeck.plist` → `Devices` → `<device id>` → `ESDProfilesInfo.ESDProfilesPreferred` (lowercase UUID). |
+| R15 | Runtime-only fields in manifests | **Observed** | n/a | Action `State` and `Pages.Current` change with no user edit; the app rewrites top-level manifests on launch. |
+| R16 | `Open` action stores absolute paths | **Observed** | [Open action](https://help.elgato.com/hc/en-us/articles/360028234471) (silent on format) | `Settings.path` holds `/Users/<user>/…`. |
+| R17 | No official CLI or URL to import, quit, or relaunch | Documented (by absence) | [CLI: stop](https://docs.elgato.com/streamdeck/cli/commands/stop); [Deep linking](https://docs.elgato.com/streamdeck/sdk/guides/deep-linking) | The CLI and `streamdeck://` act on plugins only. "Plugins do not have access to user-defined profiles." |
+| R18 | Cross-computer sync | Documented (by absence) | [Stream Deck Mobile 2.0](https://help.elgato.com/hc/en-us/articles/16786832942221) | Account sync exists for Stream Deck **Mobile** only. Nothing official covers desktop multi-computer use or KVM switches. |
+| R19 | Naming and branding | Documented | [Branding](https://docs.elgato.com/guidelines/branding); [Products](https://docs.elgato.com/guidelines/products/) | Write "Stream Deck" (two words); don't imply official status. There is no logo licence, so we use our own icon. |
+
+Note: help.elgato.com rejects scripted fetches with 403. Its public Zendesk API (`/api/v2/help_center/en-us/articles/<id>.json`) serves the same text, which is how the quotes above were checked.
