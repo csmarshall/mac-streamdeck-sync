@@ -6,7 +6,7 @@ This document is the narrative of how schrodeck fits together. The *why* behind 
 
 ## Problem
 
-You want a given kind of Stream Deck (same geometry, e.g. every XL) to show **the same profile setup at every computer you sit at**, kept in sync automatically, without exporting, importing and shuffling profiles by hand. One or more decks may be shared between computers through a Thunderbolt or KVM switch, or each desk may have its own deck of the same model. One computer may also have **several decks of the same geometry on the same setup** (e.g. two XLs): each is a full peer, so an edit on either reaches the other and every other computer.
+You want a given kind of Stream Deck (same geometry, e.g. every XL) to show **the same profile setup at every computer you sit at**, kept in sync automatically, without exporting, importing and shuffling profiles by hand. One or more decks may be shared between computers through a Thunderbolt or KVM switch, or each desk may have its own deck of the same model. One computer may also have **several decks of the same geometry on the same setup** (e.g. two XLs): each is a full peer, so an edit on either reaches the other and every other computer. This is supported but **considered a niche case** (several decks within USB-cable reach of one computer that must all show the same layout), and it isn't optimized: updates to such copies are applied one at a time, each with its own app restart (see [Applying](#applying-plan-commit-verify)).
 
 The Stream Deck app keeps profiles per machine and has no automatic cross-machine sync for desktop decks, only manual export/import ([R18], documented by absence). It also has **no device-type → profile grouping**: each profile belongs to exactly one device ([streamdeck-config-model.md](../streamdeck-config-model.md)). schrodeck adds that missing layer, called a **setup** (ADR [0029](../adr/0029-problem-statement-and-setup-model.md)).
 
@@ -156,7 +156,7 @@ Changing the app's files is surgery on a live system. **The app restart is the c
 A run goes:
 1. Pushes.
 2. Re-read heads.
-3. **Serial applies:** each Behind copy on this host, active or not, gets its own apply cycle and app restart, so a verify failure is always attributable to one copy and rollback touches only that copy.
+3. **Serial applies:** each Behind copy on this host, active or not, gets its own apply cycle and app restart, so a verify failure is always attributable to one copy and rollback touches only that copy. This is **knowingly suboptimal**: N Behind copies cost N short deck blanks. The usual case is one Behind copy per run; more than one happens only when several copies changed since this Mac's last run (several setups edited elsewhere while it was asleep, or the niche case of one setup on several local decks). Unambiguous rollback was chosen over fewer restarts.
 
 ![apply state diagram](../apply-states.png)
 

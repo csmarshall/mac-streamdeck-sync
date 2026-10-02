@@ -76,7 +76,7 @@ The selected profile per deck is never touched ([0019](0019-selected-profile-sta
 
 - Good: an aborted plan has no side effects, an edit made during the apply window is preserved, and a crash at any step has one defined recovery.
 - Good: a broken incoming version costs one restart and one rollback for that copy, not one per hour, and never holds back other copies on the same host.
-- Bad: N Behind copies on one host cost N restarts (N short deck blanks) in one run. Accepted by the project owner in exchange for unambiguous attribution; it only happens when several copies changed since the last run.
+- Bad, **knowingly suboptimal**: N Behind copies on one host cost N restarts (N short deck blanks) in one run. Accepted by the project owner in exchange for unambiguous attribution. The usual run has at most one Behind copy; more happen only when several copies changed since this host's last run, either several setups edited elsewhere while it was asleep, or the **niche case** of one setup on several decks of the same host (decks within USB-cable reach of one computer that must all show the same layout). Batching is not worth its ambiguity for that.
 - Good: applies to inactive subscribed copies too ([0004](0004-shared-profiles-and-subscriptions.md)).
 - Bad: every apply restarts the app, so the deck blanks for a few seconds. Accepted by the project owner ("always auto").
 - Bad: BLOCKED needs a person to clear it, unless a new revision arrives. That is intentional.
