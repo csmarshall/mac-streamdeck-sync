@@ -35,8 +35,7 @@ type Package struct {
 	XTestImports []string
 }
 
-// OSPackages may not be imported by core packages. A path matches an entry
-// exactly or as a prefix followed by "/". "C" is cgo.
+// OSPackages may not be imported by core packages. A path matches an entry exactly or as a prefix followed by "/". "C" is cgo.
 var OSPackages = []string{"os/exec", "os/signal", "os/user", "syscall", "golang.org/x/sys", "C"}
 
 // exemptDirs are the root-module subtrees allowed to touch the OS.
@@ -80,8 +79,7 @@ func CoreViolations(pkgs []Package, module string) []string {
 	return dedupe(out)
 }
 
-// BoundaryViolations lists every package in a dependency closure that belongs
-// to the forbidden module.
+// BoundaryViolations lists every package in a dependency closure that belongs to the forbidden module.
 func BoundaryViolations(pkgs []Package, forbiddenModule string) []string {
 	var out []string
 	for _, p := range pkgs {
