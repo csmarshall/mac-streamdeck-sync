@@ -28,11 +28,17 @@ expect() {
   fi
 }
 
-# A missing detector must not let the want-1 cases pass by accident (bash 3.2 reports a failed exec as exit 1 here, not 127).
-if [[ ! -x "$here/check-headers.sh" ]]; then
-  echo "selftest: $here/check-headers.sh is missing or not executable" >&2
-  exit 1
-fi
+# require_detector <script-name>: a missing detector must not let the want-1 cases pass by accident (bash 3.2 reports a failed exec as exit 1 here, not 127).
+require_detector() {
+  if [[ ! -x "$here/$1" ]]; then
+    echo "selftest: $here/$1 is missing or not executable" >&2
+    exit 1
+  fi
+}
+require_detector check-headers.sh
+require_detector check-gofmt.sh
+require_detector leak-scan.sh
+require_detector set-leak-scan-secret.sh
 
 # in_dir <dir> <command...>: run a command from inside a directory.
 in_dir() {
@@ -96,6 +102,81 @@ git -C "$repo_empty" add notes.txt
 expect 0 "check-headers (no args) passes a repo of headed files" in_dir "$repo_good" "$here/check-headers.sh"
 expect 1 "check-headers (no args) fails a repo with an unheaded file" in_dir "$repo_bad" "$here/check-headers.sh"
 expect 1 "check-headers (no args) fails when it finds 0 files to check" in_dir "$repo_empty" "$here/check-headers.sh"
+
+# --- check-gofmt.sh with explicit files ---------------------------------------
+{ header_go; printf 'package good\n\nfunc F() {}\n'; } >"$scratch/fmt_good.go"
+{ header_go; printf 'package bad\nfunc  F( ){ }\n'; } >"$scratch/fmt_bad.go"
+{ header_go; printf 'package broken\nfunc F( {\n'; } >"$scratch/fmt_syntax.go"
+expect 0 "check-gofmt passes a formatted file" "$here/check-gofmt.sh" "$scratch/fmt_good.go"
+expect 1 "check-gofmt fails an unformatted file" "$here/check-gofmt.sh" "$scratch/fmt_bad.go"
+expect 1 "check-gofmt fails when one of several files is unformatted" "$here/check-gofmt.sh" "$scratch/fmt_good.go" "$scratch/fmt_bad.go"
+expect 1 "check-gofmt fails a file that does not parse" "$here/check-gofmt.sh" "$scratch/fmt_syntax.go"
+
+# --- check-gofmt.sh with no arguments (the mode CI runs) ----------------------
+fmt_good_repo="$scratch/fmt-repo-good"
+fmt_bad_repo="$scratch/fmt-repo-bad"
+fmt_empty_repo="$scratch/fmt-repo-empty"
+for r in "$fmt_good_repo" "$fmt_bad_repo" "$fmt_empty_repo"; do
+  mkdir -p "$r"
+  git -C "$r" init -q
+done
+cp "$scratch/fmt_good.go" "$fmt_good_repo/good.go"
+cp "$scratch/fmt_good.go" "$fmt_bad_repo/good.go"
+cp "$scratch/fmt_bad.go" "$fmt_bad_repo/bad.go"
+printf 'not a source file\n' >"$fmt_empty_repo/notes.txt"
+git -C "$fmt_good_repo" add good.go
+git -C "$fmt_bad_repo" add good.go bad.go
+git -C "$fmt_empty_repo" add notes.txt
+expect 0 "check-gofmt (no args) passes a repo of formatted files" in_dir "$fmt_good_repo" "$here/check-gofmt.sh"
+expect 1 "check-gofmt (no args) fails a repo with an unformatted file" in_dir "$fmt_bad_repo" "$here/check-gofmt.sh"
+expect 1 "check-gofmt (no args) fails when it finds 0 files to check" in_dir "$fmt_empty_repo" "$here/check-gofmt.sh"
+
+# --- leak-scan.sh -------------------------------------------------------------
+# Each case is its own throwaway git repository, because the scanner reads tracked files only. Bad strings are assembled at runtime so this file itself never matches the scanner's patterns, and the stand-in "personal" pattern is an obviously fake word.
+make_repo() { # make_repo <name> <file-content>
+  local dir="$scratch/leak-repo-$1"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  printf '%s\n' "$2" >"$dir/content.txt"
+  git -C "$dir" add content.txt
+  echo "$dir"
+}
+clean=$(make_repo clean "docs use /Users/<user>/bin and @(1)[4057/143/<deck>]")
+home=$(make_repo home "$(printf 'path: /Users/%s/bin/demo.sh' alice)")
+device=$(make_repo device "$(printf 'id: @(1)[4057/143/%s]' AB12CD34EF)")
+extra=$(make_repo extra "$(printf 'mentions %s here' zebra-marker)")
+empty_leak_repo="$scratch/leak-repo-empty"
+mkdir -p "$empty_leak_repo"
+git -C "$empty_leak_repo" init -q
+not_a_repo="$scratch/not-a-repo"
+mkdir -p "$not_a_repo"
+expect 0 "leak-scan passes placeholders (known-good)" in_dir "$clean" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+expect 1 "leak-scan fails a real home path" in_dir "$home" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+expect 1 "leak-scan fails a serial-bearing device id" in_dir "$device" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+expect 0 "leak-scan without LEAK_SCAN_EXTRA misses a personal word" in_dir "$extra" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+expect 1 "leak-scan with LEAK_SCAN_EXTRA catches it" in_dir "$extra" env LEAK_SCAN_EXTRA=zebra-marker "$here/leak-scan.sh"
+expect 2 "leak-scan fails (2) when nothing is tracked" in_dir "$empty_leak_repo" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+expect 2 "leak-scan fails (2) outside a git repository" in_dir "$not_a_repo" env LEAK_SCAN_EXTRA= GIT_CEILING_DIRECTORIES="$scratch" "$here/leak-scan.sh"
+
+# expect_output <description> <fixed-string> <want-present|want-absent> <command...>: the combined output must (not) contain the string.
+expect_output() {
+  local desc=$1 needle=$2 mode=$3 count
+  shift 3
+  count=$("$@" 2>&1 | grep -cF -- "$needle" || true)
+  if [[ ($mode == want-present && $count -gt 0) || ($mode == want-absent && $count -eq 0) ]]; then
+    echo "ok    $desc"
+  else
+    echo "FAIL  $desc ($mode, saw $count line(s) containing: $needle)"
+    failures=$((failures + 1))
+  fi
+}
+expect_output "leak-scan says plainly it ran generic-only without the secret" 'personal identifiers were NOT checked' want-present in_dir "$clean" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+expect_output "leak-scan stays silent about skipped patterns when the secret is set" 'personal identifiers were NOT checked' want-absent in_dir "$clean" env LEAK_SCAN_EXTRA=zebra-marker "$here/leak-scan.sh"
+expect_output "leak-scan reports generic-only in its verdict line" '(generic patterns' want-present in_dir "$clean" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
+
+# --- set-leak-scan-secret.sh (usage path only; the gh call needs credentials) --
+expect 2 "set-leak-scan-secret prints usage and exits 2 without an argument" "$here/set-leak-scan-secret.sh"
+expect 2 "set-leak-scan-secret exits 2 for a missing file" "$here/set-leak-scan-secret.sh" "$scratch/no-such-file"
 
 if [[ $failures -gt 0 ]]; then
   echo "selftest: $failures detector verdict(s) wrong" >&2
