@@ -24,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -54,7 +56,12 @@ jobs:
         run: go run ./tools/portcheck/cmd/portcheck -doc docs/contracts/os-connector.md -src internal/ports
       - name: Cross-build for every OS we keep possible
         run: |
-          for goos in $(go run ./tools/archcheck/cmd/archcheck -print-goos); do
+          goos_list=$(go run ./tools/archcheck/cmd/archcheck -print-goos)
+          if [ -z "$goos_list" ]; then
+            echo "archcheck -print-goos returned no GOOS" >&2
+            exit 1
+          fi
+          for goos in $goos_list; do
             GOOS=$goos go build ./...
             (cd deckformat && GOOS=$goos go build ./...)
           done
@@ -68,6 +75,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
