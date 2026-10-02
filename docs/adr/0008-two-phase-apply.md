@@ -1,6 +1,6 @@
 # 0008. Applying an update is plan → commit → verify, with a post-quit re-check
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing. Revised 2026-10-01 (review F50, F51): installs regenerate `ActionID`s, and a rejoin archives the old copy inside the same apply. Revised 2026-10-02 (issue #5, owner's decision): the verify step moves that copy's own head; heads are per member copy.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing. Revised 2026-10-01 (review F50, F51): installs regenerate `ActionID`s, and a rejoin archives the old copy inside the same apply. Revised 2026-10-02 (issue #5, owner's decision): the verify step moves that copy's own head; heads are per member copy. Revised 2026-10-02 (owner's decision): copies are applied **serially, one copy per apply cycle and app restart**, so a verify failure is always attributable to exactly one copy and rollback is per copy; replaces the batched, all-or-nothing-per-run apply.
 - a post-quit re-check;
 - the incoming fingerprint is validated;
 - a verify failure ends in BLOCKED, not a retry loop;
@@ -24,9 +24,9 @@ The review found that reading local state only **before** quitting loses edits. 
 **A run is ordered:**
 1. Pushes.
 2. Re-read the heads.
-3. One batched apply of every copy on this host that is Behind.
+3. Apply every copy on this host that is Behind, **serially: one copy per apply cycle** (steps 1–9 below, one app restart each), in a deterministic order (by `copy_id`).
 
-Two copies of one profile on one host (on two decks) are applied in the same batch, so the app restarts once. Rollback is **all-or-nothing per run**.
+A cycle's targets are one copy, plus its archive on a rejoin. Two Behind copies on one host (two decks on one setup, or two setups on one deck) are two cycles and two restarts. This is deliberate (owner's decision): when a verify fails there is no ambiguity about which copy caused it, so rollback touches **only that copy**, and copies already applied in the run stay applied with their heads moved. After a failed cycle the run continues to the next copy only if the rollback brought the app back up healthy; otherwise the run stops and the remaining copies wait for the next tick.
 
 **The app restart is the commit point (in the transaction sense). Everything that can fail is checked before it, and the local state is re-checked after the app has stopped writing.**
 
@@ -53,7 +53,7 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
 9. **On verify failure,** log the expected and actual hashes and the differing key paths, then follow `apply.on_verify_failure`:
    - **`rollback` (default):**
      1. Snapshot the failed post-apply tree first, for diagnosis.
-     2. Restore the step-5 snapshot of **every** target in the run, through quit / swap / relaunch.
+     2. Restore the step-5 snapshot of this cycle's targets (the one copy, and its archive on a rejoin), through quit / swap / relaunch. Copies applied in earlier cycles of the run are not touched.
      3. Set a durable **BLOCKED(R)** in local state for that profile.
      4. Notify, deduplicated: "schrodeck won't update *<profile>* on this Mac: the incoming version failed verification. If you edited this profile while Stream Deck was restarting, your edit is saved in history. See `schrodeck status <profile>`."
 
@@ -75,7 +75,8 @@ The selected profile per deck is never touched ([0019](0019-selected-profile-sta
 ## Consequences
 
 - Good: an aborted plan has no side effects, an edit made during the apply window is preserved, and a crash at any step has one defined recovery.
-- Good: a broken incoming version costs one restart and one rollback per host, not one per hour.
+- Good: a broken incoming version costs one restart and one rollback for that copy, not one per hour, and never holds back other copies on the same host.
+- Bad: N Behind copies on one host cost N restarts (N short deck blanks) in one run. Accepted by the project owner in exchange for unambiguous attribution; it only happens when several copies changed since the last run.
 - Good: applies to inactive subscribed copies too ([0004](0004-shared-profiles-and-subscriptions.md)).
 - Bad: every apply restarts the app, so the deck blanks for a few seconds. Accepted by the project owner ("always auto").
 - Bad: BLOCKED needs a person to clear it, unless a new revision arrives. That is intentional.
@@ -96,7 +97,7 @@ No check yet; to be written in the plan:
 - Injected failures at each step ⇒ the expected end state: plan failure → no app file opened for writing (filesystem-port assertion); quit timeout → app still running; crash at each journal step → the recovery rule above.
 - **Post-quit edit:** a fake app that modifies a target during Quit ⇒ the swap is aborted, and the copy is Ahead on the next tick. Known-bad: with the re-check disabled, the same test must lose the edit.
 - **Verify failure:** a fake app that rewrites a field on launch ⇒ one rollback, BLOCKED(R) set, exactly one notification across 10 subsequent runs, and zero further applies until R changes.
-- Two copies of one profile on one host ⇒ one quit/relaunch.
+- Two Behind copies on one host ⇒ two sequential cycles, two quit/relaunches. With a verify failure injected into the second cycle, only the second copy is rolled back and BLOCKED; the first stays applied and its head has moved. Known-bad: a batched, all-or-nothing implementation rolls back both and must fail this test.
 - Crash **between renames** (journal at `swapping`, ledger partly done; for plain and rejoin applies, at each possible point) ⇒ recovery completes the ledger: the canonical folder holds the new member, the old copy is aside (outside `ProfilesV3`) or in its archive folder, and no extra profile appears in `ProfilesV3`. Known-bad: a recovery that treats `swapping` like `snapshotted` ("originals untouched") must fail this test (review F58).
 - Crash after the quit but before the swap (journal at `planned` or `snapshotted`, app not running, `app_was_running = true`) ⇒ recovery relaunches the app, and the originals are untouched. Known-bad: recovery that only discards the staging leaves the app stopped and must fail this test.
 - Settle-window edit: a fake user edit during settle ⇒ BLOCKED, the notification mentions the possible edit, and `resolve --push-post-apply` publishes it and clears BLOCKED.

@@ -156,7 +156,7 @@ Changing the app's files is surgery on a live system. **The app restart is the c
 A run goes:
 1. Pushes.
 2. Re-read heads.
-3. **One batched apply** of every Behind copy on this host, active or not, with one app restart.
+3. **Serial applies:** each Behind copy on this host, active or not, gets its own apply cycle and app restart, so a verify failure is always attributable to one copy and rollback touches only that copy.
 
 ![apply state diagram](../apply-states.png)
 
@@ -173,7 +173,7 @@ A run goes:
 7. **Relaunch** if it was running, and settle.
 8. **Verify:** L == hash(R) ⇒ move the head to R, then B := R.
 9. **Verify failure:**
-   - `rollback` (default): restore every target, then **BLOCKED(R)**, with one deduplicated notification ("schrodeck won't update *Work* on this Mac: the incoming version failed verification"). Because a user edit during the restart looks the same as a failed verify, the notification says so, and `resolve --push-post-apply` publishes the kept post-apply tree. There is no retry until R changes or the user runs `resolve`/`unblock`.
+   - `rollback` (default): restore this copy (and its archive on a rejoin) only, then **BLOCKED(R)**, with one deduplicated notification ("schrodeck won't update *Work* on this Mac: the incoming version failed verification"). Because a user edit during the restart looks the same as a failed verify, the notification says so, and `resolve --push-post-apply` publishes the kept post-apply tree. There is no retry until R changes or the user runs `resolve`/`unblock`.
    - `keep`: B := (R, actual hash), flagged.
 
 Crash recovery follows the journal step: before the swap, discard and restore the app's running state (relaunching it if the crash came after the quit); at or after the swap, roll forward through Quit and Verify. Every path ends with the app as it was before the apply. B is set only after this host's head is moved. **The selected profile on each deck is never read or written for sync** ([R14]). After the restart each deck shows what it showed before, and Smart Profiles keep switching locally ([R13]).

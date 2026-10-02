@@ -1,6 +1,6 @@
 stateDiagram-v2
     direction TB
-    [*] --> Plan: Behind copies on this host, batched<br/>(active or not), not BLOCKED
+    [*] --> Plan: one Behind copy per cycle, serially<br/>(active or not), not BLOCKED
     Plan --> Abort: any preflight check fails
     Plan --> Journal: staged hash == R, geometry matches,<br/>fingerprint known, schema guard ok
     Journal --> Quit: plan.json fsynced<br/>(L_plan, app_was_running)
@@ -14,11 +14,11 @@ stateDiagram-v2
     Relaunch --> Verify: app running and settled
     Verify --> Rollback: mismatch, on_verify_failure = rollback
     Verify --> Kept: mismatch, on_verify_failure = keep
-    Rollback --> Blocked: restore every target,<br/>quit / relaunch again
+    Rollback --> Blocked: restore this copy only,<br/>quit / relaunch again
     Blocked --> Notify: BLOCKED(R) until R changes<br/>or resolve / unblock
     Kept --> Notify: B := (R, actual hash), flagged
     Reevaluate --> Notify: relaunch app, the edit is<br/>Ahead or Diverged next tick
     Abort --> Notify: nothing touched, app state restored
     Verify --> Done: re-hash L == R for every target
-    Done --> [*]: journal cleared, head then B := R
+    Done --> [*]: journal cleared, head then B := R,<br/>next Behind copy gets its own cycle
     Notify --> [*]: journal cleared, logged, deduplicated
