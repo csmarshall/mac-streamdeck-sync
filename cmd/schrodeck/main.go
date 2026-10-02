@@ -6,11 +6,30 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/csmarshall/schrodeck/internal/cli"
+	"github.com/csmarshall/schrodeck/internal/logging"
 	"github.com/csmarshall/schrodeck/internal/version"
 )
 
 func main() {
-	fmt.Println("schrodeck", version.Version)
+	logger, err := logging.New(os.Stderr, os.Getenv(logging.EnvLevel))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "schrodeck:", err)
+		os.Exit(cli.ExitUsage)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := cli.Run(ctx, os.Args[1:], cli.Env{
+		Stdout:  os.Stdout,
+		Stderr:  os.Stderr,
+		Version: version.Version,
+		Logger:  logger,
+	})
+	stop()
+	os.Exit(code)
 }
