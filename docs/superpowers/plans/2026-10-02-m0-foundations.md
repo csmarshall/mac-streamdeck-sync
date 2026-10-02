@@ -33,7 +33,7 @@
 - Every detector (CI check) has a known-bad input it is seen to fail on and a known-good input it is seen to pass on, both run in CI.
 - Terminology: "revision" is a store record; "commit" only ever means git. Not relevant to M0 code, but no identifier may use "commit" for a store concept.
 - Prose (docs, PR bodies, commit bodies) is not hard-wrapped.
-- Workflow: issue #3 → worktree `~/work/claude/schrodeck-worktrees/3-scaffold` on branch `3-scaffold` → one commit per task (`feat(#3): …`, `ci(#3): …`, `docs(#3): …`) → one PR with `Closes #3` → green CI → code-review subagent on the diff → owner review → squash merge. M0 is a single PR because CI does not exist until it lands.
+- Workflow: issue #3 → worktree `~/work/claude/schrodeck-worktrees/3-scaffold` on branch `3-scaffold` → one commit per task (`feat(#3): …`, `ci(#3): …`, `docs(#3): …`) → one PR that says `Refs #3` (the normalization-fixtures bullet of #3 moves to a follow-up issue, Task 9; #3 is closed by hand after merge) → green CI → code-review subagent on the diff → owner review → squash merge. M0 is a single PR because CI does not exist until it lands.
 
 ## Review Focus
 
@@ -79,11 +79,14 @@ schrodeck/
 
 ### Task 0: Worktree
 
+Precondition: the pull request that adds this plan and the M1 plan (`docs/m0-m1-plans`) is merged, so `origin/main` contains both plans. The worktree below is cut from `origin/main`; a plan that exists only on a local branch would be missing from it, and a later `git pull` in `~/work/personal/schrodeck` would create a merge commit.
+
 - [ ] **Step 1: Create the worktree for issue #3**
 
 ```bash
 cd ~/work/personal/schrodeck
 git fetch origin
+git log -1 --format=%s origin/main -- docs/superpowers/plans/2026-10-02-m0-foundations.md   # must print the plans commit; stop if empty
 git worktree add -b 3-scaffold ~/work/claude/schrodeck-worktrees/3-scaffold origin/main
 cd ~/work/claude/schrodeck-worktrees/3-scaffold
 ```
@@ -96,7 +99,7 @@ Every later step runs from this directory.
 
 **Files:**
 - Create: `go.mod`, `internal/version/version.go`, `cmd/schrodeck/main.go` (temporary body, replaced in Task 3), `deckformat/go.mod`, `deckformat/doc.go`, `tools/ci/check-headers.sh`, `tools/ci/selftest.sh`
-- Modify: `.gitignore` (add the built binary)
+- Modify: `.gitignore` (add the built binary and `*.log`)
 
 **Interfaces:**
 - Produces: `version.Version string` (package `github.com/csmarshall/schrodeck/internal/version`); `tools/ci/check-headers.sh [file...]` exits 0 when every file has the header, 1 otherwise; `tools/ci/selftest.sh` runs every detector self-test and exits non-zero on the first wrong verdict count.
@@ -310,17 +313,21 @@ Append to `.gitignore`:
 ```
 # Local build output
 /schrodeck
+
+# Command logs (the global rules tee every command run on a real machine to a
+# timestamped .log); they can hold profile names, host ids and paths
+*.log
 ```
 
 - [ ] **Step 6: Verify both modules build and every file has its header**
 
-Run: `git add -A && go build ./... && (cd deckformat && go build ./...) && go run ./cmd/schrodeck && tools/ci/check-headers.sh`
-Expected: `schrodeck dev`, then `check-headers: 5 file(s) ok` (`cmd/schrodeck/main.go`, `internal/version/version.go`, `deckformat/doc.go`, `tools/ci/check-headers.sh`, `tools/ci/selftest.sh`). The checker reads tracked files, hence the `git add -A` first.
+Run: `git add go.mod cmd internal deckformat tools .gitignore && go build ./... && (cd deckformat && go build ./...) && go run ./cmd/schrodeck && tools/ci/check-headers.sh`
+Expected: `schrodeck dev`, then `check-headers: 5 file(s) ok` (`cmd/schrodeck/main.go`, `internal/version/version.go`, `deckformat/doc.go`, `tools/ci/check-headers.sh`, `tools/ci/selftest.sh`). The checker reads tracked files, hence staging first. Every `git add` in these plans names its paths: `git add -A` would also stage stray files such as command logs.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add -A
+git add go.mod cmd internal deckformat tools .gitignore
 git commit -m "feat(#3): Go module skeleton, nested deckformat module, MPL header check with self-test"
 ```
 
@@ -1100,7 +1107,9 @@ git commit -m "feat(#3): CLI skeleton with version/status/doctor and contract E 
 
 **Interfaces:**
 - Produces (package `github.com/csmarshall/schrodeck/internal/ports`): `Paths`, `HostIdentity`, `AppControl`, `DeviceEnumerator`, `AppPrefs`, `Watcher`, `Scheduler`, `Notifier`, `StoreSync` (methods exactly as contract A), plus `Geometry{Columns, Rows, Dials int}`, `Deck{AppDeviceID, ManifestDeviceID string; Geometry Geometry; Model string; Virtual bool; SerialHash string}`, `Event{Paths []string}`, `AgentSpec{Executable string; Args []string; DeviceAttach bool}`, `AgentStatus{Installed, Running bool; Detail string}`, `Severity` (`SeverityInfo|SeverityWarning|SeverityError`), `Notification{Title, Body string; Severity Severity; Persistent bool}`, `Freshness` (`Unknown` = zero value, `Fresh`, `InFlight`, `Conflict`).
-- Produces (package `portcheck`): `type Port struct{Name string; Methods []string}`; `FromDoc(md []byte) ([]Port, error)`; `FromSource(dir string) ([]Port, error)`; `Compare(doc, src []Port) []string`.
+- Produces (package `portcheck`): `type Kind string` (`Interface`, `Struct`); `type Port struct{Name string; Kind Kind; Members []string}` (method signatures and struct fields rendered without parameter names, sorted); `FromDoc(md []byte) ([]Port, error)`; `FromSource(dir string) ([]Port, error)`; `Compare(doc, src []Port) []string`; `Count([]Port) (interfaces, structs int)`.
+
+portcheck compares **signatures**, not only names: a port whose parameter list, result types or struct fields drift from contract A is a difference, while a renamed parameter is not. Every interface must exist on both sides; every struct contract A declares (`Deck`, `Event`) must match field for field, and `internal/ports` may add helper structs (`AgentSpec`, `Notification`, …) that contract A only names. A names-only comparison was tried first and missed a reverted `Watch` parameter list; `TestCompareDetectsDrift`'s "changed parameter list" case pins that.
 
 - [ ] **Step 1: Change contract A's `Watcher` (ours, so code and doc change together)**
 
@@ -1141,7 +1150,7 @@ func TestFromDoc(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := render(ports)
-	want := "Notifier: Notify | Paths: Home LogDir"
+	want := "Notification: Title string | Notifier: Notify(Notification) error | Paths: Home() string; LogDir() string"
 	if got != want {
 		t.Fatalf("FromDoc = %q, want %q", got, want)
 	}
@@ -1158,7 +1167,7 @@ func writeSource(t *testing.T, src string) string {
 
 func TestCompareAgreement(t *testing.T) {
 	doc, _ := FromDoc([]byte(docTwoPorts))
-	src, err := FromSource(writeSource(t, "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(n Notification) error }\ntype Notification struct{}\ntype unexported interface{ x() }\n"))
+	src, err := FromSource(writeSource(t, "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(note Notification) error }\ntype Notification struct{ Title string }\ntype Helper struct{ X int }\ntype unexported interface{ x() }\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1170,11 +1179,17 @@ func TestCompareAgreement(t *testing.T) {
 // Known-bad cases: each must produce at least one difference.
 func TestCompareDetectsDrift(t *testing.T) {
 	doc, _ := FromDoc([]byte(docTwoPorts))
+	const notifier = "type Notifier interface { Notify(n Notification) error }\ntype Notification struct{ Title string }\n"
 	cases := map[string]string{
-		"missing port":   "package ports\ntype Paths interface { Home() string; LogDir() string }\n",
-		"extra port":     "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(n Notification) error }\ntype Clock interface { Now() int }\n",
-		"missing method": "package ports\ntype Paths interface { Home() string }\ntype Notifier interface { Notify(n Notification) error }\n",
-		"renamed method": "package ports\ntype Paths interface { Home() string; Logs() string }\ntype Notifier interface { Notify(n Notification) error }\n",
+		"missing port":           "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notification struct{ Title string }\n",
+		"extra port":             "package ports\ntype Paths interface { Home() string; LogDir() string }\n" + notifier + "type Clock interface { Now() int }\n",
+		"missing method":         "package ports\ntype Paths interface { Home() string }\n" + notifier,
+		"renamed method":         "package ports\ntype Paths interface { Home() string; Logs() string }\n" + notifier,
+		"changed parameter list": "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(ctx context.Context, n Notification) error }\ntype Notification struct{ Title string }\n",
+		"changed result":         "package ports\ntype Paths interface { Home() string; LogDir() (string, error) }\n" + notifier,
+		"struct field type":      "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(n Notification) error }\ntype Notification struct{ Title []byte }\n",
+		"struct missing field":   "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(n Notification) error }\ntype Notification struct{}\n",
+		"documented struct gone": "package ports\ntype Paths interface { Home() string; LogDir() string }\ntype Notifier interface { Notify(n Notification) error }\n",
 	}
 	for name, code := range cases {
 		src, err := FromSource(writeSource(t, code))
@@ -1212,7 +1227,7 @@ func TestRepositoryPortsMatchContractA(t *testing.T) {
 func render(ps []Port) string {
 	var parts []string
 	for _, p := range ps {
-		parts = append(parts, p.Name+": "+strings.Join(p.Methods, " "))
+		parts = append(parts, p.Name+": "+strings.Join(p.Members, "; "))
 	}
 	return strings.Join(parts, " | ")
 }
@@ -1243,6 +1258,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1250,10 +1266,24 @@ import (
 	"strings"
 )
 
-// Port is one interface: its name and sorted method names.
+// Kind says what a declaration is.
+type Kind string
+
+const (
+	Interface Kind = "interface"
+	Struct    Kind = "struct"
+)
+
+// Port is one declared type from contract A or internal/ports: an interface
+// with its method signatures, or a struct with its fields. Members are
+// rendered without parameter names ("Watch(context.Context, []string,
+// time.Duration) (<-chan Event, error)", "Model string") and sorted, so a
+// changed parameter list or field type is a difference while a renamed
+// parameter is not.
 type Port struct {
 	Name    string
-	Methods []string
+	Kind    Kind
+	Members []string
 }
 
 var goBlock = regexp.MustCompile("(?s)```go\n(.*?)```")
@@ -1267,7 +1297,7 @@ func FromDoc(md []byte) ([]Port, error) {
 		if err != nil {
 			return nil, fmt.Errorf("go block %d does not parse: %w", i, err)
 		}
-		ports = append(ports, interfaces(f, false)...)
+		ports = append(ports, declarations(f, false)...)
 	}
 	return sortPorts(ports), nil
 }
@@ -1290,33 +1320,83 @@ func FromSource(dir string) ([]Port, error) {
 		if err != nil {
 			return nil, err
 		}
-		ports = append(ports, interfaces(f, true)...)
+		ports = append(ports, declarations(f, true)...)
 	}
 	return sortPorts(ports), nil
 }
 
-func interfaces(f *ast.File, exportedOnly bool) []Port {
+func declarations(f *ast.File, exportedOnly bool) []Port {
 	var ports []Port
 	ast.Inspect(f, func(n ast.Node) bool {
 		ts, ok := n.(*ast.TypeSpec)
-		if !ok {
-			return true
-		}
-		it, ok := ts.Type.(*ast.InterfaceType)
 		if !ok || (exportedOnly && !ts.Name.IsExported()) {
 			return true
 		}
-		p := Port{Name: ts.Name.Name}
-		for _, field := range it.Methods.List {
-			for _, name := range field.Names {
-				p.Methods = append(p.Methods, name.Name)
+		switch t := ts.Type.(type) {
+		case *ast.InterfaceType:
+			p := Port{Name: ts.Name.Name, Kind: Interface}
+			for _, field := range t.Methods.List {
+				ft, isFunc := field.Type.(*ast.FuncType)
+				for _, name := range field.Names {
+					if isFunc {
+						p.Members = append(p.Members, name.Name+signature(ft))
+					} else {
+						p.Members = append(p.Members, name.Name+" "+types.ExprString(field.Type))
+					}
+				}
+				if len(field.Names) == 0 { // an embedded interface
+					p.Members = append(p.Members, types.ExprString(field.Type))
+				}
 			}
+			sort.Strings(p.Members)
+			ports = append(ports, p)
+		case *ast.StructType:
+			p := Port{Name: ts.Name.Name, Kind: Struct}
+			for _, field := range t.Fields.List {
+				typ := types.ExprString(field.Type)
+				for _, name := range field.Names {
+					p.Members = append(p.Members, name.Name+" "+typ)
+				}
+				if len(field.Names) == 0 { // an embedded field
+					p.Members = append(p.Members, typ)
+				}
+			}
+			sort.Strings(p.Members)
+			ports = append(ports, p)
 		}
-		sort.Strings(p.Methods)
-		ports = append(ports, p)
 		return true
 	})
 	return ports
+}
+
+// signature renders a method's parameter and result types without names.
+func signature(ft *ast.FuncType) string {
+	list := func(fl *ast.FieldList) []string {
+		var out []string
+		if fl == nil {
+			return out
+		}
+		for _, field := range fl.List {
+			typ := types.ExprString(field.Type)
+			n := len(field.Names)
+			if n == 0 {
+				n = 1
+			}
+			for i := 0; i < n; i++ {
+				out = append(out, typ)
+			}
+		}
+		return out
+	}
+	sig := "(" + strings.Join(list(ft.Params), ", ") + ")"
+	switch res := list(ft.Results); len(res) {
+	case 0:
+	case 1:
+		sig += " " + res[0]
+	default:
+		sig += " (" + strings.Join(res, ", ") + ")"
+	}
+	return sig
 }
 
 func sortPorts(ps []Port) []Port {
@@ -1325,34 +1405,51 @@ func sortPorts(ps []Port) []Port {
 }
 
 // Compare returns one line per difference between the documented and the
-// implemented ports, sorted; an empty result means they agree.
+// implemented declarations, sorted; an empty result means they agree. Every
+// interface must exist on both sides with the same method signatures. Every
+// struct contract A declares must exist in internal/ports with the same
+// fields; internal/ports may declare further helper structs (e.g. the
+// argument types of a port) that contract A only names.
 func Compare(doc, src []Port) []string {
-	byName := func(ps []Port) map[string][]string {
-		m := map[string][]string{}
+	byName := func(ps []Port) map[string]Port {
+		m := map[string]Port{}
 		for _, p := range ps {
-			m[p.Name] = p.Methods
+			m[p.Name] = p
 		}
 		return m
 	}
 	d, s := byName(doc), byName(src)
 	var diffs []string
-	for name, dm := range d {
-		sm, ok := s[name]
-		if !ok {
-			diffs = append(diffs, fmt.Sprintf("port %s is in contract A but not in internal/ports", name))
-			continue
-		}
-		if strings.Join(dm, ",") != strings.Join(sm, ",") {
-			diffs = append(diffs, fmt.Sprintf("port %s: contract A methods [%s], internal/ports methods [%s]", name, strings.Join(dm, " "), strings.Join(sm, " ")))
+	for name, dp := range d {
+		sp, ok := s[name]
+		switch {
+		case !ok:
+			diffs = append(diffs, fmt.Sprintf("%s %s is in contract A but not in internal/ports", dp.Kind, name))
+		case sp.Kind != dp.Kind:
+			diffs = append(diffs, fmt.Sprintf("%s is a %s in contract A but a %s in internal/ports", name, dp.Kind, sp.Kind))
+		case strings.Join(dp.Members, "; ") != strings.Join(sp.Members, "; "):
+			diffs = append(diffs, fmt.Sprintf("%s %s: contract A [%s], internal/ports [%s]", dp.Kind, name, strings.Join(dp.Members, "; "), strings.Join(sp.Members, "; ")))
 		}
 	}
-	for name := range s {
-		if _, ok := d[name]; !ok {
-			diffs = append(diffs, fmt.Sprintf("port %s is in internal/ports but not in contract A", name))
+	for name, sp := range s {
+		if _, ok := d[name]; !ok && sp.Kind == Interface {
+			diffs = append(diffs, fmt.Sprintf("interface %s is in internal/ports but not in contract A", name))
 		}
 	}
 	sort.Strings(diffs)
 	return diffs
+}
+
+// Count returns how many interfaces and structs ps holds.
+func Count(ps []Port) (interfaces, structs int) {
+	for _, p := range ps {
+		if p.Kind == Interface {
+			interfaces++
+		} else {
+			structs++
+		}
+	}
+	return interfaces, structs
 }
 ```
 
@@ -1406,7 +1503,8 @@ func main() {
 	if len(diffs) > 0 {
 		os.Exit(1)
 	}
-	fmt.Printf("portcheck: %d ports match contract A\n", len(doc))
+	ifaces, structs := portcheck.Count(doc)
+	fmt.Printf("portcheck: %d ports and %d structs match contract A\n", ifaces, structs)
 }
 ```
 
@@ -1576,11 +1674,11 @@ type StoreSync interface {
 - [ ] **Step 7: Run all portcheck tests and the command**
 
 Run: `go test ./tools/portcheck/ && go run ./tools/portcheck/cmd/portcheck`
-Expected: `ok`, then `portcheck: 9 ports match contract A` (the number is printed, not asserted; it comes from the document).
+Expected: `ok`, then `portcheck: 9 ports and 2 structs match contract A` (the numbers are printed, not asserted; they come from the document).
 
 - [ ] **Step 8: Prove the command fails on drift**
 
-Temporarily rename `EnsureDownloaded` to `EnsureLocal` in `internal/ports/ports.go` and run `go run ./tools/portcheck/cmd/portcheck; echo "exit $?"`. Expected: a `port StoreSync: contract A methods [EnsureDownloaded PushConfirmed ReadFreshness], internal/ports methods [EnsureLocal PushConfirmed ReadFreshness]` line and `exit 1`. Rename it back by hand (the file is not committed yet) and re-run: exit 0.
+Temporarily rename `EnsureDownloaded` to `EnsureLocal` in `internal/ports/ports.go` and run `go run ./tools/portcheck/cmd/portcheck; echo "exit $?"`. Expected: an `interface StoreSync: contract A [EnsureDownloaded([]string) error; PushConfirmed([]string) (bool, error); ReadFreshness([]string) (Freshness, error)], internal/ports [EnsureLocal([]string) error; PushConfirmed([]string) (bool, error); ReadFreshness([]string) (Freshness, error)]` line and `exit 1`. Then the same with a signature change only: give `Watch` back its old parameter list in the contract A copy you are editing (drop `ctx context.Context, `) and re-run; it must also exit 1, naming `interface Watcher`. Rename it back by hand (the file is not committed yet) and re-run: exit 0.
 
 - [ ] **Step 9: Commit**
 
@@ -2190,10 +2288,16 @@ git commit -m "feat(#3): fakes for every contract A port, including a recursive 
 - Produces (package `github.com/csmarshall/schrodeck/internal/conformance`):
   - `type TB interface{ Helper(); Errorf(format string, args ...any) }` (`*testing.T` satisfies it)
   - `type AppHarness struct{ App ports.AppControl; ProfilesDir string; QuitTimeout, SettleQuiet, SettleMax time.Duration }`
-  - `AppControlQuit(tb TB, h AppHarness)`; `AppControlQuitTimeout(tb TB, stuck ports.AppControl, timeout time.Duration)`
+  - `AppControlQuit(tb TB, h AppHarness)`; `AppControlQuitTimeout(tb TB, stuck ports.AppControl, timeout time.Duration)`; `AppControlLaunchSettle(tb TB, h AppHarness)` (contract A's "launch + settle")
   - `WatcherRecursive(tb TB, w ports.Watcher, root string, debounce time.Duration)`; `WatcherBurstIsOneEvent(tb TB, w ports.Watcher, root string, debounce time.Duration)`
   - `HostIdentityStable(tb TB, h ports.HostIdentity)`
   - Real adapters (M1 onward) call these same functions from their own tests on their OS's runner.
+
+Every suite here has a known-bad implementation in `conformance_test.go` that it must fail: `writesAfterQuit` and `liesAboutQuit` (Quit), `settlesImmediately` (a `WaitSettled` that ignores ongoing writes), `topLevelOnly` (a non-recursive watcher), `perWrite` (a watcher with no debounce, one event per changed file) and `flappingIdentity`.
+
+Contract A's other two suites are **not** in M0, because nothing implements them yet; each arrives with the milestone that first needs its guarantee:
+- `StoreSync` (a local non-synced file reads `Unknown`, a provider file does not): **M2**, with the store engine and the Dropbox/iCloud freshness adapter (ADR 0023).
+- Filesystem guarantees (rename-aside/rename-in under a concurrent reader, the lock excludes a second process, journal fsync survives a kill): **M2** for the store's rename and lock (ADR 0009), extended in **M3** for the apply swap and journal (ADR 0008).
 
 - [ ] **Step 1: Write the failing tests, including the known-bad fakes**
 
@@ -2287,6 +2391,26 @@ func TestAppControlQuitTimeoutCatchesFalseSuccess(t *testing.T) {
 	}
 }
 
+func TestAppControlLaunchSettleOnFake(t *testing.T) {
+	dir := t.TempDir()
+	AppControlLaunchSettle(t, harness(t, fake.NewApp(dir), dir))
+}
+
+// settlesImmediately violates contract A: WaitSettled returns as soon as the
+// process is up, without waiting for ProfilesDir to go quiet.
+type settlesImmediately struct{ *fake.App }
+
+func (s settlesImmediately) WaitSettled(quietFor, max time.Duration) error { return nil }
+
+func TestAppControlLaunchSettleCatchesNoWait(t *testing.T) {
+	dir := t.TempDir()
+	rec := &recorder{}
+	AppControlLaunchSettle(rec, harness(t, settlesImmediately{fake.NewApp(dir)}, dir))
+	if len(rec.failures) == 0 {
+		t.Fatal("suite passed an app whose WaitSettled ignores ongoing writes")
+	}
+}
+
 // --- Watcher ---------------------------------------------------------------
 
 const debounce = 200 * time.Millisecond
@@ -2348,6 +2472,52 @@ func TestWatcherRecursiveCatchesTopLevelOnly(t *testing.T) {
 	WatcherRecursive(rec, topLevelOnly{}, t.TempDir(), debounce)
 	if len(rec.failures) == 0 {
 		t.Fatal("suite passed a watcher that only sees the top level")
+	}
+}
+
+// perWrite violates contract A: no debounce, one event per changed file.
+type perWrite struct{}
+
+func (perWrite) Watch(ctx context.Context, paths []string, debounce time.Duration) (<-chan ports.Event, error) {
+	snapshot := func() map[string]string {
+		m := map[string]string{}
+		for _, p := range paths {
+			entries, _ := os.ReadDir(p)
+			for _, e := range entries {
+				if info, err := e.Info(); err == nil {
+					m[e.Name()] = fmt.Sprintf("%d:%d", info.Size(), info.ModTime().UnixNano())
+				}
+			}
+		}
+		return m
+	}
+	ch := make(chan ports.Event, 64)
+	go func() {
+		defer close(ch)
+		prev := snapshot()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Millisecond):
+				cur := snapshot()
+				for name, sig := range cur {
+					if prev[name] != sig {
+						ch <- ports.Event{Paths: []string{name}}
+					}
+				}
+				prev = cur
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func TestWatcherBurstCatchesPerWriteEvents(t *testing.T) {
+	rec := &recorder{}
+	WatcherBurstIsOneEvent(rec, perWrite{}, t.TempDir(), debounce)
+	if len(rec.failures) == 0 {
+		t.Fatal("suite passed a watcher that sends one event per write")
 	}
 }
 
@@ -2415,6 +2585,10 @@ type TB interface {
 package conformance
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/csmarshall/schrodeck/internal/ports"
@@ -2499,6 +2673,48 @@ func AppControlQuitTimeout(tb TB, stuck ports.AppControl, timeout time.Duration)
 	}
 	if !running {
 		tb.Errorf("app reported not running after Quit failed")
+	}
+}
+
+// AppControlLaunchSettle checks contract A's "launch + settle": WaitSettled
+// returns only once the app is running AND ProfilesDir has been quiet for the
+// requested window. While the suite keeps writing ProfilesDir for three quiet
+// windows, WaitSettled must not return, and when it does the last write must
+// be at least one quiet window old.
+func AppControlLaunchSettle(tb TB, h AppHarness) {
+	tb.Helper()
+	if err := h.App.Launch(); err != nil {
+		tb.Errorf("Launch: %v", err)
+		return
+	}
+	var mu sync.Mutex
+	var lastWrite time.Time
+	done := make(chan struct{})
+	busyFor := 3 * h.SettleQuiet
+	go func() {
+		defer close(done)
+		end := time.Now().Add(busyFor)
+		for i := 0; time.Now().Before(end); i++ {
+			_ = os.WriteFile(filepath.Join(h.ProfilesDir, "busy.json"), []byte(fmt.Sprint(i)), 0o644)
+			mu.Lock()
+			lastWrite = time.Now()
+			mu.Unlock()
+			time.Sleep(h.SettleQuiet / 4)
+		}
+	}()
+	start := time.Now()
+	err := h.App.WaitSettled(h.SettleQuiet, h.SettleMax)
+	returned := time.Now()
+	<-done
+	if err != nil {
+		tb.Errorf("WaitSettled: %v", err)
+		return
+	}
+	mu.Lock()
+	quietFor := returned.Sub(lastWrite)
+	mu.Unlock()
+	if returned.Sub(start) < busyFor || quietFor < h.SettleQuiet {
+		tb.Errorf("WaitSettled returned after %s while ProfilesDir was written until %s before it; contract A: settled means quiet for %s", returned.Sub(start), quietFor, h.SettleQuiet)
 	}
 }
 ```
@@ -3200,7 +3416,7 @@ chmod +x tools/ci/check-gofmt.sh tools/ci/leak-scan.sh tools/ci/set-leak-scan-se
 
 - [ ] **Step 6: Run the self-tests and the real checks**
 
-Run: `tools/ci/selftest.sh && git add -A && tools/ci/check-gofmt.sh && tools/ci/leak-scan.sh`
+Run: `tools/ci/selftest.sh && git add tools/ci && tools/ci/check-gofmt.sh && tools/ci/leak-scan.sh`
 Expected: every self-test line `ok`; `check-gofmt: N file(s) formatted`; `leak-scan: clean (generic patterns)` plus the WARNING line (no secret locally). Then run the manual pre-push scan from the global rules as well; it must print nothing.
 
 - [ ] **Step 7: Commit**
@@ -3332,22 +3548,31 @@ git push -u origin 3-scaffold
 
 (Pushing is an outward action: confirm with the owner first if this plan is being executed without standing approval.)
 
-- [ ] **Step 4: Open the PR**
+- [ ] **Step 4: File the follow-up for what M0 leaves undone, then open the PR**
+
+Issue #3 also lists normalization fixtures, which need the hasher M1 builds. So this PR references #3 instead of closing it, and the open bullet moves to its own issue:
+
+```bash
+gh issue create --title "Normalization fixtures (moved from #3)" --body "Issue #3's normalization-fixtures bullet, moved because the fixtures need the contract C hasher. Delivered by M1 Tasks 2 and 4 (docs/superpowers/plans/2026-10-02-m1-format-toolkit.md): the synthetic fixture package and the known-good/known-bad hash pairs."
+# note the number it prints as <f>
+```
 
 ```bash
 gh pr create --title "M0: Go scaffold, contract E CLI, ports + fakes + conformance, CI" --body-file - <<'EOF'
-Closes #3
+Refs #3 (the normalization-fixtures bullet continues in #<f>)
 
 M0 foundations per docs/superpowers/plans/2026-10-02-m0-foundations.md.
 
 - Go module + nested `deckformat` module (ADR 0031), CLI skeleton with `version`/`status`/`doctor` and `--json` (contract E, new `docs/contracts/cli-json.md`, golden tests).
 - Port interfaces mirroring contract A (Watcher gains a `ctx`), fakes for every port, conformance-suite skeleton; each suite fails on a known-bad fake.
 - CI: self-tests for every detector, MPL headers, gofmt, leak scan (generic patterns + `LEAK_SCAN_EXTRA` secret), vet, staticcheck, OS-free core per GOOS, deckformat boundary, contract A port check, cross-build, tests on Linux and macOS.
-- Moved from issue #3 to M1: the normalization fixtures (they need the hasher, which M1 builds).
+- Moved from issue #3 to M1: the normalization fixtures (they need the hasher, which M1 builds), tracked in #<f>.
+
+https://claude.ai/code/session_01BpNb9wCfEXosfKyRoBrsr4
 EOF
 ```
 
-Append the session link line required by the current attribution rules to the PR body if executing in a session that has one.
+The last line is the attribution link of the session that executes the plan; the one shown is the planning session's, so a different executing session puts its own link there.
 
 - [ ] **Step 5: Owner sets the leak-scan secret**
 
@@ -3366,7 +3591,7 @@ Expected: both checks `pass`; `mergeStateStatus` is `CLEAN`. If a job sticks at 
 
 - [ ] **Step 7: Code review, owner review, merge**
 
-Dispatch a code-reviewer subagent on `gh pr diff` (it must not `open` anything and must end with DECISIONS NEEDED). Fix findings in new commits on the branch. After the owner approves: `gh pr merge --squash --delete-branch`, then `git -C ~/work/personal/schrodeck pull` and `git worktree remove ~/work/claude/schrodeck-worktrees/3-scaffold`.
+Dispatch a code-reviewer subagent on `gh pr diff` (it must not `open` anything and must end with DECISIONS NEEDED). Fix findings in new commits on the branch. After the owner approves: `gh pr merge --squash --delete-branch`, then `gh issue close 3 -c "M0 merged; the normalization fixtures continue in #<f>."`, `git -C ~/work/personal/schrodeck pull` and `git worktree remove ~/work/claude/schrodeck-worktrees/3-scaffold`.
 
 - [ ] **Step 8: Make the checks required**
 
@@ -3376,7 +3601,8 @@ Ask the owner to mark `checks (linux)` and `tests (macOS)` as required status ch
 
 ## Self-review
 
-- **Spec / milestone coverage:** M0 row: repo + CI (Tasks 1, 8, 9), Go core with no OS imports (Task 7), port interfaces (Task 4) + fakes (Task 5) + conformance skeleton (Task 6). Issue #3 bullets: CLI skeleton with `status --json` and `doctor` wiring (Task 3); core with no OS imports (Task 7); ports exactly per contract A (Task 4) with fakes and conformance where a fake violating `Quit` fails (Task 6); gofmt/vet/staticcheck/test on Linux and macOS (Task 9); MPL header on every source file (Task 1); normalization fixtures → moved to M1 (stated in the PR body). ADR 0024's "Verified by" for A (conformance + port-name check) and E (golden files) are covered; C and D belong to M1 and M2.
-- **Placeholders:** none; every code step has complete code. The staticcheck-version fallback is a concrete procedure, not a TBD.
+- **Spec / milestone coverage:** M0 row: repo + CI (Tasks 1, 8, 9), Go core with no OS imports (Task 7), port interfaces (Task 4) + fakes (Task 5) + conformance skeleton (Task 6). Issue #3 bullets: CLI skeleton with `status --json` and `doctor` wiring (Task 3); core with no OS imports (Task 7); ports exactly per contract A (Task 4) with fakes and conformance where a fake violating `Quit` fails (Task 6); gofmt/vet/staticcheck/test on Linux and macOS (Task 9); MPL header on every source file (Task 1); normalization fixtures → moved to M1 (follow-up issue filed in Task 9; the PR says `Refs #3`, and #3 is closed by hand after merge). ADR 0024's "Verified by" for A (conformance + port signature check) and E (golden files) are covered; C and D belong to M1 and M2.
+- **Placeholders:** none in code; every code step has complete code. The only fill-in is the follow-up issue number `<f>` in Task 9, with the command that produces it. The staticcheck-version fallback is a concrete procedure, not a TBD.
+- **Logging (ADR 0017):** M0 logs to stderr only (Task 2). The persistent log file under `Paths.LogDir()` is deferred to M4, the first milestone with unattended runs that nobody watches; until then every command runs in a terminal and its output is teed to a log by the person running it.
 - **Type consistency:** `cli.Check`/`CheckResult`/`Status*` are used identically in Tasks 3; `ports.Event{Paths}` and `Watch(ctx, …)` match between Task 4, the fake (Task 5) and the suite (Task 6); `fake.DirDigest` is defined in Task 5 and used in Task 6.
 - **Review Focus:** each line names its pinning test and owning task.

@@ -4,7 +4,7 @@
 
 **Goal:** Build `deckformat`, the standalone Stream Deck format toolkit of ADR 0031 (lossless parser, contract C hasher, semantic diff, redaction and fixture export, observation harness, probe runner), wire it into read-only `schrodeck status`, `inventory`, `doctor`, `observe` and `fixture export` on macOS, then use it on a real Mac to settle the format unknowns before any write path exists.
 
-**Architecture:** `deckformat` (nested module, no OS code, reads only through `fs.FS`) holds everything about the file format. The root module adds platform-neutral identity and deck logic, a read-only macOS connector (prefs via `defaults export`, `ioreg`, `pgrep`), a `doctor` package that assembles contract B and C probes plus the ADR 0015 fingerprint check, and new CLI commands. Nothing writes the Stream Deck app's files or restarts the app; schrodeck writes only its own state dir and paths the user names with `--out`.
+**Architecture:** `deckformat` (nested module, no OS code; it reads the app's files only through `fs.FS`, and its `observe`, `redact` and `pathguard` packages write snapshots and exports with `os`, only to paths the caller names) holds everything about the file format. The root module adds platform-neutral identity and deck logic, a read-only macOS connector (prefs via `defaults export`, `ioreg`, `pgrep`), a `doctor` package that assembles contract B and C probes plus the ADR 0015 fingerprint check, and new CLI commands. Nothing writes the Stream Deck app's files or restarts the app; schrodeck writes only its own state dir and paths the user names with `--out`.
 
 **Tech Stack:** Go 1.27.1; stdlib `encoding/json/jsontext` (ordered tokens, RFC 8785 canonicalization; available without GOEXPERIMENT in 1.27); `golang.org/x/text` v0.42.0 (Unicode NFC, deckformat); `howett.net/plist` v1.0.1 (BSD-style licence, macOS connector only); Python 3 stdlib for one independent reference implementation used to compute a golden value.
 
@@ -13,22 +13,24 @@
 ## Global Constraints
 
 - Everything in the M0 plan's Global Constraints applies (public repo and placeholders, no literal backslash-u escapes, Go 1.27.1 pinned in `go.mod`, MPL-2.0 header, OS-free core, `deckformat` imports nothing from the root module, contract A is the only home of the port list, contract E rules, exit codes, logging, shell rules, known-bad inputs for every detector, no hard-wrapped prose).
-- **M1 writes nothing to the Stream Deck app's files and never quits or launches the app.** `deckformat` reads only through `fs.FS`. The only writes are schrodeck's own state dir (`known-fingerprints.json`, observation snapshots that are deleted on `observe stop`), and directories the user passes with `--out`, which may never be inside the app's data root.
+- **M1 writes nothing to the Stream Deck app's files and never quits or launches the app.** `deckformat` reads the app's files only through `fs.FS`. The only writes are schrodeck's own state dir (`known-fingerprints.json`, observation snapshots that are deleted on `observe stop`), and paths the user passes with `--out`. Every such path is checked by `pathguard.RefuseInside` on its **final** target (symlinks and `../` resolved, letter case ignored) against the app data root and the profiles directory, and `--name` must be a single path element (Task 6, Task 11).
+- **Tests never read a real Stream Deck install by default.** The one test that does (`TestLiveReadOnly`, Task 10) runs only with `SCHRODECK_LIVE=1`, so `go test ./...` on a development Mac touches nothing personal unless asked to.
+- **Observation reports carry no real ids:** profile, page and action UUIDs become stable pseudonyms (`profile-1`, `profile-1/page/0`, `uuid-3`; Task 7), and serials are removed wherever they appear, not only inside a device id (Task 6).
 - **Never read or write the selected profile for sync** (ADR 0019). Reading it in `doctor`'s M2 probe is the one sanctioned read.
 - **Device ids embed USB serials (R9):** commands redact them by default (`inventory --show-ids` is the only opt-out), observation reports and fixtures are redacted, and no fixture in the repository contains a real one (fixtures use `@(1)[4057/143/<deck>]`).
 - **Unknown data is never dropped:** a manifest that cannot be re-encoded byte for byte is an error, not a best effort.
 - Hash definition: contract C `norm_version = 1`, implemented exactly; any change to it is a contract C change plus a `norm_version` bump, never a silent code change.
 - `copy_id`, canonical folders and `host_id` are derived (ADRs 0010, 0026, contract D); the only fixed input is the namespace URL, which is versioned in its path.
-- Workflow per issue: `gh issue create` → worktree `~/work/claude/schrodeck-worktrees/<n>-<slug>` from `origin/main` → commits `feat(#n): …` / `docs(#n): …` → PR with `Closes #n` → green CI → code-review subagent (must not `open` anything, must end with DECISIONS NEEDED) → owner review → squash merge → `git pull` in `~/work/personal/schrodeck`. M1 is six issues/PRs, merged in order:
+- Workflow per issue: `gh issue create` → worktree `~/work/claude/schrodeck-worktrees/<n>-<slug>` from `origin/main` → commits `feat(#n): …` / `docs(#n): …` → PR with `Closes #n` → green CI → code-review subagent (must not `open` anything, must end with DECISIONS NEEDED) → owner review → squash merge → `git pull` in `~/work/personal/schrodeck`. Every `git add` names its paths (never `git add -A`: command logs and other stray files must not be staged). Every PR body ends with the executing session's attribution link (the planning session's is shown in Task 3). M1 is six issues/PRs, merged in order:
 
   | Issue (title) | Tasks |
   |---|---|
   | deckformat: lossless manifest model and profile loader | 1, 2, 3 |
   | deckformat: normalized hash, norm_version 1 | 4 |
-  | deckformat: semantic diff and redaction | 5, 6 |
+  | deckformat: semantic diff, redaction and the write guard | 5, 6 |
   | deckformat: observation harness and probe runner | 7, 8 |
   | schrodeck: identity, read-only macOS connector, inventory/status/doctor/observe/fixture | 9, 10, 11 |
-  | Settle format unknowns on a real Mac (U1–U10, P8, P10, P11, F1, geometry) | 12 |
+  | Settle format unknowns on a real Mac (U1–U10, P8, P10, P11, F1, geometry; issues #1, #2) | 12 |
 
 ## Review Focus
 
@@ -36,7 +38,7 @@
 2. **The app's prefs `Devices` dictionary holds an entry that is not a device record** (observed: one string-valued entry), and several virtual decks may share `@(0)[]`: the deck list must skip the former, mark the latter as non-destinations, and never crash. Pinned by `TestDeviceRecordsKeepsOddEntriesVisible` and `TestEnumerateAndAnnotate` (Task 10).
 3. **The ADR 0015 fingerprint may flap on ordinary edits**, because the key-path set depends on content (a smart profile's `AppIdentifier`, a title colour that only appears once set): that would pause sync on normal use. `TestSchemaDependsOnOptionalKeys` (Task 3) documents the hazard; Task 12 observation F1 measures it on a real Mac before M2 relies on it.
 4. **Page folders are upper-case on disk while every reference to them is lower-case** (observed on all three real profiles): loading and hashing must match case-insensitively. Pinned by `TestPagesAreKeyedCaseInsensitively` (Task 2) and `TestCopyHashesEqual` (Task 4).
-5. **Redaction misses** (a serial inside a settings value or a prefs key, a home path inside a `file://` URL, the Mac's name in a URL, a token under a setting named like a secret): reports and fixtures must pass the repository leak scan. Pinned by `TestString`, `TestExportFixtureLeavesNothingPersonal` with its known-bad control (Task 6), `TestCompareReportsAndRedacts` (Task 7) and `TestInventoryRedactsDeviceIDsByDefault` (Task 11).
+5. **Redaction misses** (a bare serial outside any device id, in a settings value or a prefs field; a home path inside a `file://` URL; the Mac's name in a URL; a token under a setting named like a secret; a real profile or page UUID in a committed report): reports and fixtures must pass the repository leak scan. Pinned by `TestString`, `TestBareSerialsAreRedacted` and `TestExportFixtureLeavesNothingPersonal`, each with a known-bad control (Task 6), `TestCompareReportsAndRedacts` and `TestReportsCarryNoRealIDs` (Task 7), and `TestInventoryRedactsDeviceIDsByDefault` (Task 11).
 
 ---
 
@@ -50,20 +52,22 @@ deckformat/
 ├── profile/   profile.go schema.go (+_test)   loader, allow-list (P1, P7), accessors, ADR 0015 schema/fingerprint
 ├── normhash/  normhash.go (+_test), testdata/refhash.py   contract C hash, independent Python reference
 ├── semdiff/   semdiff.go (+_test)        changes in Stream Deck terms (raw and semantic)
-├── redact/    redact.go (+_test)         scrub identifiers, synthetic images, fixture export
-├── observe/   observe.go (+_test)        snapshot / settle / save / load / compare / report
+├── redact/    redact.go (+_test)         scrub identifiers (incl. bare serials), synthetic images, fixture export
+├── pathguard/ pathguard.go (+_test)      refuse writes inside protected roots (symlinks, ../, case)
+├── observe/   observe.go (+_test)        snapshot / settle / save / load / compare / report (UUIDs → pseudonyms)
 └── probe/     probe.go contractc.go (+_test)   probe runner, contract C read-only probes
 internal/
 ├── identity/  identity.go (+_test)       host_id, NAMESPACE_SCHRODECK, copy_id, canonical folder
-├── decks/     decks.go (+_test)          device keys, geometry table, destinations
+├── decks/     decks.go (+_test)          device keys, R8 DeviceType table + observed product map, destinations, unmatched
 ├── host/      host.go                    the ports one command run needs
 ├── connector/ connector_darwin.go connector_other.go
 │   └── macos/ parse.go (+_test) macos_darwin.go (+_test)
 ├── doctor/    doctor.go (+_test)         contract B probes, fingerprint known-good set
 └── cli/       cli.go commands.go observe.go json.go (+_test, golden files)
+tools/observe-m1.sh                                                                          (Task 12)
 docs/
 ├── contracts/ os-connector.md profile-format.md store-format.md cli-json.md client-os.md   (edited)
-├── adr/0015-schema-guard.md                                                                (edited)
+├── adr/0003-…, 0015-schema-guard.md, 0026-profile-identity.md                              (edited)
 ├── observations/*.md                                                                        (Task 12)
 └── references.md, streamdeck-config-model.md                                                (Task 12)
 ```
@@ -608,6 +612,7 @@ git commit -m "feat(#<n>): jsondoc: ordered JSON tree with byte-exact round trip
 
 **Files:**
 - Create: `deckformat/fixture/fixture.go`, `deckformat/profile/profile.go`, `deckformat/profile/profile_test.go`
+- Modify: `docs/contracts/profile-format.md` (new row P12: the app writes compact JSON)
 
 **Interfaces:**
 - Consumes: `jsondoc`.
@@ -1370,10 +1375,16 @@ func (p *Profile) SortedPageKeys() []string {
 Run: `cd deckformat && go test ./profile/ ./fixture/ && go vet ./...`
 Expected: `ok` for `profile`, `[no test files]` for `fixture`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Record the compact-JSON assumption in contract C**
+
+The loader refuses a manifest it cannot re-encode byte for byte, which includes indented JSON and a trailing newline. That is the right fail-closed behaviour, but it rests on one observation, so it becomes a named contract row: an app update that starts pretty-printing then fails as "P12", not as a puzzle. In `docs/contracts/profile-format.md`, add after the P11 row:
+
+`| P12 | Manifests are compact JSON: no indentation or other insignificant whitespace, members in the order the app wrote them, no trailing newline | observed (one Mac, app 7.5.1, three profiles, 2026-10-02) | the loader (P1) re-encodes every manifest and refuses any that do not round-trip byte for byte, naming the file; a formatting change by the app therefore fails P1 with a not-round-trip error instead of being rewritten |`
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add deckformat/fixture deckformat/profile
+git add deckformat/fixture deckformat/profile docs/contracts/profile-format.md
 git commit -m "feat(#<n>): synthetic fixtures and the profile loader with contract C's allow-list (P1, P7)"
 ```
 
@@ -1631,10 +1642,10 @@ git add deckformat/profile docs/adr/0015-schema-guard.md
 git commit -m "feat(#<n>): profile schema and ADR 0015 format fingerprint"
 tools/ci/selftest.sh && tools/ci/check-headers.sh && tools/ci/check-gofmt.sh && tools/ci/leak-scan.sh
 export $(cat ~/.ssh_agent_socket) && git push -u origin HEAD
-gh pr create --fill --body "Closes #<n>"
+gh pr create --fill --body "$(printf 'Closes #%s\n\nhttps://claude.ai/code/session_01BpNb9wCfEXosfKyRoBrsr4\n' <n>)"
 ```
 
-Then: `gh pr checks --watch`, code-review subagent on `gh pr diff`, owner review, `gh pr merge --squash --delete-branch`, `git -C ~/work/personal/schrodeck pull`.
+The link is the attribution line of the session executing the plan (the planning session's is shown; a different executing session uses its own). Then: `gh pr checks --watch`, code-review subagent on `gh pr diff`, owner review, `gh pr merge --squash --delete-branch`, `git -C ~/work/personal/schrodeck pull`.
 
 ---
 
@@ -2278,7 +2289,7 @@ git commit -m "feat(#<n>): contract C normalized hash (norm_version 1) with an i
 
 ### Task 5: Semantic diff
 
-Issue: "deckformat: semantic diff and redaction" (Tasks 5 and 6; new worktree `<n>-diff-redact`).
+Issue: "deckformat: semantic diff, redaction and the write guard" (Tasks 5 and 6; new worktree `<n>-diff-redact`).
 
 **Files:**
 - Create: `deckformat/semdiff/semdiff.go`, `deckformat/semdiff/semdiff_test.go`
@@ -2287,7 +2298,7 @@ Issue: "deckformat: semantic diff and redaction" (Tasks 5 and 6; new worktree `<
 - Consumes: `jsondoc`, `profile`, `normhash.Normalize`, `normhash.PageLabels`.
 - Produces (package `semdiff`): `Kind` (`Added`, `Removed`, `Modified`); `Mode` (`Raw`, `Semantic`); `Change{Profile, Where, Path string; Kind Kind; Before, After string}` with JSON members `profile, where, path, kind, before, after`, and `(Change) String()`; `Values(profileName, where string, a, b *jsondoc.Value) []Change`; `Profiles(before, after *profile.Profile, mode Mode) ([]Change, error)`; `Sets(before, after map[string]*profile.Profile, mode Mode) ([]Change, error)`.
 
-`Where` reads like the app: `page 1 › key 0,0`, `page 2 › dial 7,3`, `default page`, `sub-page <folder>`, `profile`, `files`, `profiles`. Raw-mode page names also carry the page id in parentheses, because during an observation the id is part of what is being observed.
+`Where` reads like the app: `page 1 › key 0,0`, `page 2 › dial 7,3`, `default page`, `sub-page <folder>`, `profile`, `files`, `profiles`. Raw-mode page names also carry the page id in parentheses, because during an observation the id is part of what is being observed; observation reports then replace every id with a stable pseudonym (Task 7), so the relation survives and the real id does not.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2804,18 +2815,195 @@ git commit -m "feat(#<n>): semantic diff in Stream Deck terms, raw and normalize
 
 ---
 
-### Task 6: Redaction and fixture export
+### Task 6: Redaction, the write guard and fixture export
 
 **Files:**
-- Create: `deckformat/redact/redact.go`, `deckformat/redact/redact_test.go`
+- Create: `deckformat/pathguard/pathguard.go`, `deckformat/pathguard/pathguard_test.go`, `deckformat/redact/redact.go`, `deckformat/redact/redact_test.go`
 
 **Interfaces:**
 - Consumes: `jsondoc`, `profile`, `normhash` (tests), `fixture` (tests).
-- Produces (package `redact`): placeholders `User = "<user>"`, `Host = "<host>"`, `Deck = "<deck>"`, `Redacted = "<redacted>"`; `Options{UserNames, HostNames []string}`; `New(Options) (*Redactor, error)` (refuses names under 3 characters); `(*Redactor) String(string) string`; `(*Redactor) Value(*jsondoc.Value) *jsondoc.Value` (deep copy); `Strings(*profile.Profile) []string`; `SyntheticPNG([]byte) []byte`; `ErrOutputExists`; `ExportFixture(p *profile.Profile, r *Redactor, sourceRoot, outDir, folder string) error`.
+- Produces (package `pathguard`): `ErrInside`, `ErrNotName`; `RefuseInside(target string, roots ...string) error` (resolves both sides through symlinks, including a target that does not exist yet, ignores letter case, and treats `../` correctly); `SingleName(name string) error`.
+- Produces (package `redact`): placeholders `User = "<user>"`, `Host = "<host>"`, `Deck = "<deck>"`, `Redacted = "<redacted>"`; `Options{UserNames, HostNames, Serials []string}`; `New(Options) (*Redactor, error)` (refuses names under 3 characters); `SerialsFrom(ids ...string) []string`; `(*Redactor) String(string) string`; `(*Redactor) Value(*jsondoc.Value) *jsondoc.Value` (deep copy); `Strings(*profile.Profile) []string`; `SyntheticPNG([]byte) []byte`; `ErrOutputExists`; `ExportFixture(p *profile.Profile, r *Redactor, sourceRoot, outDir, folder string) error`.
 
-What is removed: the serial part of every device id (vendor and product are public model ids and stay), any home directory name (macOS, Linux, Windows), the user's and the Mac's names wherever they appear, and the value of any member whose name looks like a secret (`token`, `secret`, `passw…`, `api_key`, `auth…`, `cookie`, `session`). Images are replaced by a synthetic 4×4 PNG derived from the original's hash, so distinct images stay distinct and hash tests keep their meaning. Redaction is a first pass; a human reviews `Strings(...)` and the leak scan runs before anything is committed.
+What is removed: the serial part of every device id (vendor and product are public model ids and stay); **every serial the caller has seen, wherever it appears** (`Options.Serials`, collected with `SerialsFrom` from the prefs device keys and the manifests' `Device.UUID`s, so a bare serial in a plugin setting or a prefs field is caught too); any home directory name (macOS, Linux, Windows); the user's and the Mac's names wherever they appear; and the value of any member whose name looks like a secret (`token`, `secret`, `passw…`, `api_key`, `auth…`, `cookie`, `session`). Images are replaced by a synthetic 4×4 PNG derived from the original's hash, so distinct images stay distinct and hash tests keep their meaning. Redaction is a first pass; a human reviews `Strings(...)` and the leak scan runs before anything is committed.
 
-- [ ] **Step 1: Write the failing tests**
+`pathguard` exists because a text comparison of paths is not a guard: a symlinked output directory, a `../` in a folder name, or a different letter case on a case-insensitive disk each walk past it. `ExportFixture` checks its **final** target (`outDir/folder`) and requires `folder` to be one path element; the CLI (Task 11) applies the same guard to `observe stop --out` and to `fixture export` before anything is read.
+
+- [ ] **Step 1: Write the failing guard tests**
+
+`deckformat/pathguard/pathguard_test.go`:
+
+```go
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+package pathguard
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestRefuseInside(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "app")
+	if err := os.MkdirAll(filepath.Join(root, "ProfilesV3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(base, "out")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A symlink outside the root that points into it.
+	link := filepath.Join(base, "innocent")
+	if err := os.Symlink(filepath.Join(root, "ProfilesV3"), link); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		target string
+		inside bool
+	}{
+		{root, true},
+		{filepath.Join(root, "ProfilesV3", "x.md"), true},
+		{filepath.Join(root, "ProfilesV3", "new", "deeper", "x.md"), true}, // does not exist yet
+		{filepath.Join(outside, "..", "app", "ProfilesV3", "x.md"), true},  // "../" walk back in
+		{filepath.Join(link, "x.md"), true},                                // symlinked directory
+		{filepath.Join(link, "new", "x.md"), true},                         // symlink, then a missing part
+		{strings.ToUpper(filepath.Join(root, "PROFILESV3", "x.md")), true}, // letter case
+		{filepath.Join(outside, "x.md"), false},
+		{filepath.Join(base, "app-other", "x.md"), false}, // shares a prefix, not a parent
+		{filepath.Join(base, "..app", "x.md"), false},
+	}
+	for _, c := range cases {
+		err := RefuseInside(c.target, "", root)
+		if got := errors.Is(err, ErrInside); got != c.inside {
+			t.Errorf("RefuseInside(%s) = %v, want inside=%v", c.target, err, c.inside)
+		}
+	}
+}
+
+func TestSingleName(t *testing.T) {
+	for _, ok := range []string{"A.sdProfile", "x", "..x.sdProfile"} {
+		if err := SingleName(ok); err != nil {
+			t.Errorf("SingleName(%q) = %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "../A.sdProfile", "a/b.sdProfile", `a\b.sdProfile`} {
+		if err := SingleName(bad); !errors.Is(err, ErrNotName) {
+			t.Errorf("SingleName(%q) accepted", bad)
+		}
+	}
+}
+```
+
+The cases a text-only check gets wrong are the known-bad inputs here: the symlinked directory, the symlink followed by a missing part, the `../` walk back in, the upper-cased path, and the sibling that only shares a prefix (`app-other`, `..app`).
+
+- [ ] **Step 2: Run to verify failure, then implement the guard**
+
+Run: `cd deckformat && go test ./pathguard/` → FAIL, `undefined: RefuseInside`.
+
+`deckformat/pathguard/pathguard.go`:
+
+```go
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+// Package pathguard keeps writes out of protected directories, such as the
+// Stream Deck app's data root. Every command that writes to a path a person
+// typed checks the final target here first.
+package pathguard
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// ErrInside means a write target lies inside a protected root.
+var ErrInside = errors.New("pathguard: target is inside a protected directory")
+
+// ErrNotName means a name that must be a single path element is not one.
+var ErrNotName = errors.New("pathguard: not a single path element")
+
+// RefuseInside returns ErrInside if target is, or would be created, inside any
+// of roots. Both sides are made absolute and resolved through symlinks (the
+// deepest part of each path that exists is resolved, the rest is appended), so
+// neither a symlinked output directory nor a "../" segment can reach a root.
+// The comparison ignores letter case: macOS and Windows file systems usually
+// do, and refusing a few more paths than necessary is the safe direction.
+func RefuseInside(target string, roots ...string) error {
+	t, err := resolve(target)
+	if err != nil {
+		return err
+	}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		r, err := resolve(root)
+		if err != nil {
+			return err
+		}
+		if within(strings.ToLower(r), strings.ToLower(t)) {
+			return fmt.Errorf("%w: %s is inside %s", ErrInside, target, root)
+		}
+	}
+	return nil
+}
+
+// SingleName returns ErrNotName unless name is one path element: not empty,
+// not "." or "..", and without a separator.
+func SingleName(name string) error {
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("%w: %q", ErrNotName, name)
+	}
+	return nil
+}
+
+func within(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolve returns p made absolute, with its deepest existing ancestor (or p
+// itself) resolved through symlinks.
+func resolve(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	cur, rest := abs, ""
+	for {
+		if _, err := os.Lstat(cur); err == nil {
+			real, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(real, rest), nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs, nil
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+```
+
+Run: `cd deckformat && go test ./pathguard/` → `ok`.
+
+- [ ] **Step 3: Write the failing redaction tests**
 
 `deckformat/redact/redact_test.go`:
 
@@ -2838,6 +3026,7 @@ import (
 	"github.com/csmarshall/schrodeck/deckformat/fixture"
 	"github.com/csmarshall/schrodeck/deckformat/jsondoc"
 	"github.com/csmarshall/schrodeck/deckformat/normhash"
+	"github.com/csmarshall/schrodeck/deckformat/pathguard"
 	"github.com/csmarshall/schrodeck/deckformat/profile"
 )
 
@@ -2993,6 +3182,44 @@ func TestExportRefusesUnsafeTargets(t *testing.T) {
 	if err := ExportFixture(p, r, src, full, "F.sdProfile"); !errors.Is(err, ErrOutputExists) {
 		t.Fatalf("export into a non-empty dir: %v", err)
 	}
+	// Known-bad: a folder name that walks out of outDir and back into the source.
+	out := filepath.Join(filepath.Dir(src), "out")
+	escape := filepath.Join("..", filepath.Base(src), "F.sdProfile")
+	if err := ExportFixture(p, r, src, out, escape); !errors.Is(err, pathguard.ErrNotName) {
+		t.Fatalf("a ../ folder name was accepted: %v", err)
+	}
+	// Known-bad: an output directory that is a symlink into the source.
+	link := filepath.Join(t.TempDir(), "looks-safe")
+	if err := os.Symlink(src, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExportFixture(p, r, src, link, "F.sdProfile"); !errors.Is(err, pathguard.ErrInside) {
+		t.Fatalf("export through a symlink into the source tree: %v", err)
+	}
+	if entries, _ := os.ReadDir(src); len(entries) != 0 {
+		t.Fatalf("a refused export still wrote into the source tree: %v", entries)
+	}
+}
+
+func TestBareSerialsAreRedacted(t *testing.T) {
+	r, err := New(Options{Serials: SerialsFrom(realDevice, "@(0)[]", "not an id")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A serial on its own, outside any device id: a plugin setting or a prefs field.
+	in := `{"deviceSerial":"` + realSerial + `","note":"deck ` + strings.ToLower(realSerial) + ` on desk"}`
+	got := r.String(in)
+	if strings.Contains(strings.ToLower(got), strings.ToLower(realSerial)) {
+		t.Fatalf("bare serial survived: %s", got)
+	}
+	if !strings.Contains(got, Deck) {
+		t.Fatalf("serial not replaced by %s: %s", Deck, got)
+	}
+	// Known-bad control: without the collected serials the same input leaks.
+	plain, _ := New(Options{})
+	if !strings.Contains(plain.String(in), realSerial) {
+		t.Fatal("control: a redactor without serials should not catch a bare serial; the test above proves nothing")
+	}
 }
 
 func TestStringsListsEverythingForReview(t *testing.T) {
@@ -3006,12 +3233,14 @@ func TestStringsListsEverythingForReview(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+`TestBareSerialsAreRedacted` carries its own known-bad control (a redactor without the collected serials must leak the same input), and `TestExportRefusesUnsafeTargets` covers a `../` folder name and a symlinked output directory, and checks that a refused export wrote nothing.
+
+- [ ] **Step 4: Run to verify failure**
 
 Run: `cd deckformat && go test ./redact/`
 Expected: FAIL, `undefined: New`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 5: Implement**
 
 `deckformat/redact/redact.go`:
 
@@ -3041,6 +3270,7 @@ import (
 	"strings"
 
 	"github.com/csmarshall/schrodeck/deckformat/jsondoc"
+	"github.com/csmarshall/schrodeck/deckformat/pathguard"
 	"github.com/csmarshall/schrodeck/deckformat/profile"
 )
 
@@ -3055,7 +3285,8 @@ const (
 var (
 	// A Stream Deck device id embeds the USB serial: @(1)[vendor/product/serial].
 	// Vendor and product are public model ids and are kept.
-	deviceID = regexp.MustCompile(`@\((\d+)\)\[(\d+)/(\d+)/[^\]\s"]+\]`)
+	deviceID     = regexp.MustCompile(`@\((\d+)\)\[(\d+)/(\d+)/[^\]\s"]+\]`)
+	deviceSerial = regexp.MustCompile(`@\(\d+\)\[\d+/\d+/([^\]\s"]+)\]`)
 	// Home directories: macOS, Linux, Windows (with either separator).
 	homeDir = regexp.MustCompile(`(/Users/|/home/|[A-Za-z]:\\Users\\|[A-Za-z]:/Users/)[^/\\\s"'<>]+`)
 	// Member names whose values are secrets whatever they contain.
@@ -3063,9 +3294,13 @@ var (
 )
 
 // Options lists identifiers known to the caller (from the host connector).
+// Serials are the serial parts of every device id the caller has seen (prefs
+// keys and manifests, see SerialsFrom): they are removed wherever they appear,
+// not only inside a device id.
 type Options struct {
 	UserNames []string
 	HostNames []string
+	Serials   []string
 }
 
 // Redactor applies the rules.
@@ -3100,11 +3335,32 @@ func New(o Options) (*Redactor, error) {
 	if err := add(o.UserNames, User); err != nil {
 		return nil, err
 	}
+	if err := add(o.Serials, Deck); err != nil {
+		return nil, err
+	}
 	// Longest first, so "alice-mbp" is replaced before "alice".
 	sort.SliceStable(r.literals, func(i, j int) bool {
 		return len(r.literals[i].re.String()) > len(r.literals[j].re.String())
 	})
 	return r, nil
+}
+
+// SerialsFrom returns the serial part of every device id among ids (an
+// "@(n)[vendor/product/serial]" string); other strings and serial-less ids
+// such as a virtual deck's "@(0)[]" contribute nothing.
+func SerialsFrom(ids ...string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range ids {
+		for _, m := range deviceSerial.FindAllStringSubmatch(id, -1) {
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				out = append(out, m[1])
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // String redacts one string.
@@ -3196,22 +3452,20 @@ func SyntheticPNG(original []byte) []byte {
 var ErrOutputExists = errors.New("redact: output directory is not empty")
 
 // ExportFixture writes a redacted copy of p to outDir/<folder>: manifests
-// redacted, images replaced by SyntheticPNG. outDir must be empty or absent,
-// and must not lie inside sourceRoot (the folder p was read from), so an
-// export can never write into the app's own data.
+// redacted, images replaced by SyntheticPNG. folder must be a single path
+// element, outDir must be empty or absent, and the final target must not lie
+// inside sourceRoot (the folder p was read from), so an export can never write
+// into the app's own data (pathguard resolves symlinks and "../").
 func ExportFixture(p *profile.Profile, r *Redactor, sourceRoot, outDir, folder string) error {
+	if err := pathguard.SingleName(folder); err != nil {
+		return err
+	}
 	absOut, err := filepath.Abs(outDir)
 	if err != nil {
 		return err
 	}
-	if sourceRoot != "" {
-		absSrc, err := filepath.Abs(sourceRoot)
-		if err != nil {
-			return err
-		}
-		if rel, err := filepath.Rel(absSrc, absOut); err == nil && !strings.HasPrefix(rel, "..") {
-			return fmt.Errorf("redact: refusing to export into the source tree %s", sourceRoot)
-		}
+	if err := pathguard.RefuseInside(filepath.Join(absOut, folder), sourceRoot); err != nil {
+		return err
 	}
 	if entries, err := os.ReadDir(absOut); err == nil && len(entries) > 0 {
 		return ErrOutputExists
@@ -3238,16 +3492,16 @@ func ExportFixture(p *profile.Profile, r *Redactor, sourceRoot, outDir, folder s
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes, and run the repository leak scan over the new tests**
+- [ ] **Step 6: Run to verify it passes, and run the repository leak scan over the new tests**
 
-Run: `cd deckformat && go test ./redact/ && cd .. && git add -A && tools/ci/leak-scan.sh`
-Expected: `ok`; `leak-scan: clean`. The test inputs build personal-looking strings by concatenation precisely so this scan stays clean.
+Run: `cd deckformat && go test ./redact/ ./pathguard/ && cd .. && git add deckformat/redact deckformat/pathguard && tools/ci/leak-scan.sh`
+Expected: `ok` twice; `leak-scan: clean`. The test inputs build personal-looking strings by concatenation precisely so this scan stays clean.
 
-- [ ] **Step 5: Commit, push, PR, merge** (as in Task 3 step 6)
+- [ ] **Step 7: Commit, push, PR, merge** (as in Task 3 step 6)
 
 ```bash
-git add deckformat/redact
-git commit -m "feat(#<n>): redaction and redacted fixture export"
+git add deckformat/redact deckformat/pathguard
+git commit -m "feat(#<n>): redaction (including bare serials), the write guard, and redacted fixture export"
 ```
 
 ---
@@ -3263,7 +3517,7 @@ Issue: "deckformat: observation harness and probe runner" (Tasks 7 and 8; new wo
 - Consumes: `profile.LoadAll`, `jsondoc`, `normhash.NormVersion`, `semdiff.Sets`, `semdiff.Values`, `redact.Redactor`.
 - Produces (package `observe`): `Snapshot{TakenAt time.Time; AppVersion string; Profiles map[string]*profile.Profile; LoadErrors []string; Prefs *jsondoc.Value}`; `Take(profiles fs.FS, prefs *jsondoc.Value, appVersion string, now time.Time) (*Snapshot, error)`; `(*Snapshot) Digest() string`; `Settle(take func() (*Snapshot, error), wait func(), maxTries int) (*Snapshot, error)`; `ErrExists`; `(*Snapshot) Save(dir string) error`; `Load(dir string) (*Snapshot, error)`; `Report{Name string; Before, After time.Time; AppVersion string; Changes []semdiff.Change}`; `Compare(name string, before, after *Snapshot, r *redact.Redactor) (Report, error)`; `(Report) Markdown() string`; `(Report) EvidenceRow() string`.
 
-Snapshots hold unredacted data and are written with `0600`/`0700` permissions into schrodeck's state dir; reports are redacted. The draft evidence row has the column layout of `docs/references.md` (`| id | Topic | Status | Source | What it says / what we saw |`); a person fills in the id and topic and rewrites the summary as a claim.
+Snapshots hold unredacted data and are written with `0600`/`0700` permissions into schrodeck's state dir; reports are redacted and **pseudonymized**: every UUID in a report (profile folders, page folders, `ActionID`s, references) is replaced by a stable readable name. Profile folders become `profile-1`, `profile-2`, … in folder-name order; pages become `profile-1/page/0`, `profile-1/default` or `profile-1/sub-page-1` by their position before the change (after it, for a new page); anything else becomes `uuid-1`, `uuid-2`, … in order of first appearance. The same id always gets the same name within a report, so what an observation is for (did an id change, which page moved where) stays visible, while a committed report carries no real id. Table cells are cut at 120 characters, not bytes, so a cut never splits a multi-byte character. The draft evidence row has the column layout of `docs/references.md` (`| id | Topic | Status | Source | What it says / what we saw |`); a person fills in the id and topic and rewrites the summary as a claim.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3282,10 +3536,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/csmarshall/schrodeck/deckformat/fixture"
 	"github.com/csmarshall/schrodeck/deckformat/jsondoc"
 	"github.com/csmarshall/schrodeck/deckformat/redact"
+	"github.com/csmarshall/schrodeck/deckformat/semdiff"
 )
 
 var (
@@ -3373,7 +3629,7 @@ func TestCompareReportsAndRedacts(t *testing.T) {
 	md := rep.Markdown()
 	for _, want := range []string{
 		"# Observation: u0-title",
-		"page 1 (aaaaaaaa-0000-4000-8000-0000000000a1) › key 1,0",
+		"page 1 (profile-1/page/0) › key 1,0",
 		`"Paste"`,
 		"@(1)[4057/143/<deck>]",
 		"| R?? | <topic> | **Observed** | `schrodeck observe u0-title`, app 7.5.1, 2026-10-02 |",
@@ -3384,6 +3640,66 @@ func TestCompareReportsAndRedacts(t *testing.T) {
 	}
 	if strings.Contains(md, realSerial) {
 		t.Fatalf("report leaks the serial:\n%s", md)
+	}
+}
+
+func TestReportsCarryNoRealIDs(t *testing.T) {
+	before := take(t, fixture.XL(), nil, t0)
+	edited := fixture.XL()
+	edited.Pages[0].Buttons[1].Title = "Paste"
+	edited.Pages[0].Buttons[1].ActionID = "11111111-2222-4333-8444-555555555555"
+	after := take(t, edited, nil, t0.Add(time.Minute))
+	rep, err := Compare("ids", before, after, redactor(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := rep.Markdown()
+	if uuidPattern.MatchString(md) {
+		t.Fatalf("report contains a raw UUID:\n%s", md)
+	}
+	// Equalities survive: the changed ActionID became uuid-N on both sides of
+	// one row, and the page is named by its position.
+	if !strings.Contains(md, "uuid-") || !strings.Contains(md, "profile-1/page/0") {
+		t.Fatalf("pseudonyms missing:\n%s", md)
+	}
+	// Known-bad control: the same comparison without pseudonyms carries UUIDs,
+	// so the check above can fail.
+	raw, err := semdiff.Sets(before.Profiles, after.Profiles, semdiff.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rawText strings.Builder
+	for _, c := range raw {
+		rawText.WriteString(c.String() + "\n")
+	}
+	if !uuidPattern.MatchString(rawText.String()) {
+		t.Fatal("control: the raw diff has no UUID, so this test proves nothing")
+	}
+}
+
+func TestPseudonymsAreStableAndDistinct(t *testing.T) {
+	ps := newPseudonyms()
+	a := ps.String("x AAAAAAAA-0000-4000-8000-000000000001 y aaaaaaaa-0000-4000-8000-000000000001")
+	if a != "x uuid-1 y uuid-1" {
+		t.Fatalf("same id in two letter cases: %q", a)
+	}
+	if b := ps.String("BBBBBBBB-0000-4000-8000-000000000002"); b != "uuid-2" {
+		t.Fatalf("second id: %q", b)
+	}
+}
+
+func TestCellCutsCharactersNotBytes(t *testing.T) {
+	long := strings.Repeat("é", 200) // two bytes each
+	got := cell(long)
+	if !utf8.ValidString(got) {
+		t.Fatal("cell split a multi-byte character")
+	}
+	if n := utf8.RuneCountInString(got); n != cellRunes {
+		t.Fatalf("cell kept %d characters, want %d", n, cellRunes)
+	}
+	// Known-bad control: a byte cut at the old position splits the character.
+	if utf8.ValidString(long[:117]) {
+		t.Fatal("control: a byte cut at 117 should split a two-byte character")
 	}
 }
 
@@ -3430,6 +3746,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -3591,12 +3908,94 @@ func Compare(name string, before, after *Snapshot, r *redact.Redactor) (Report, 
 	if before.Prefs != nil || after.Prefs != nil {
 		changes = append(changes, semdiff.Values("app preferences", "prefs", before.Prefs, after.Prefs)...)
 	}
+	ps := newPseudonyms(before, after)
 	for i := range changes {
 		c := &changes[i]
 		c.Profile, c.Where, c.Path = r.String(c.Profile), r.String(c.Where), r.String(c.Path)
 		c.Before, c.After = redactJSON(r, c.Before), redactJSON(r, c.After)
+		c.Profile, c.Where, c.Path = ps.String(c.Profile), ps.String(c.Where), ps.String(c.Path)
+		c.Before, c.After = ps.String(c.Before), ps.String(c.After)
 	}
 	return Report{Name: name, Before: before.TakenAt, After: after.TakenAt, AppVersion: after.AppVersion, Changes: changes}, nil
+}
+
+// uuidPattern matches a UUID in any letter case.
+var uuidPattern = regexp.MustCompile(`[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}`)
+
+// pseudonyms replaces every UUID in a report with a stable, readable name, so
+// a committed report carries no real profile, page or action ids while every
+// equality between ids stays visible (the same id always gets the same name).
+// Profile folders become "profile-1", "profile-2", … in folder-name order;
+// pages become "profile-1/page/0", "profile-1/default" or
+// "profile-1/sub-page-1" by their position before the change (after it, for a
+// page that is new); any other UUID (an ActionID, an unknown reference)
+// becomes "uuid-1", "uuid-2", … in order of first appearance.
+type pseudonyms struct {
+	names map[string]string // lower-case UUID → pseudonym
+	next  int
+}
+
+func newPseudonyms(snaps ...*Snapshot) *pseudonyms {
+	ps := &pseudonyms{names: map[string]string{}}
+	folders := map[string]*profile.Profile{}
+	for _, s := range snaps {
+		for folder, p := range s.Profiles {
+			if _, seen := folders[folder]; !seen {
+				folders[folder] = p
+			}
+		}
+	}
+	var sorted []string
+	for f := range folders {
+		sorted = append(sorted, f)
+	}
+	sort.Strings(sorted)
+	for i, folder := range sorted {
+		prof := fmt.Sprintf("profile-%d", i+1)
+		ps.names[strings.ToLower(strings.TrimSuffix(folder, profile.Suffix))] = prof
+		subPages := 0
+		for _, s := range snaps {
+			p := s.Profiles[folder]
+			if p == nil {
+				continue
+			}
+			labels, err := normhash.PageLabels(p)
+			if err != nil {
+				continue // a malformed profile: its page ids fall back to uuid-N
+			}
+			var ids []string
+			for id := range labels {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				if _, named := ps.names[id]; named {
+					continue
+				}
+				label := labels[id]
+				if strings.HasPrefix(label, "other/") {
+					subPages++
+					label = fmt.Sprintf("sub-page-%d", subPages)
+				}
+				ps.names[id] = prof + "/" + label
+			}
+		}
+	}
+	return ps
+}
+
+// String replaces every UUID in s.
+func (ps *pseudonyms) String(s string) string {
+	return uuidPattern.ReplaceAllStringFunc(s, func(u string) string {
+		key := strings.ToLower(u)
+		if name, ok := ps.names[key]; ok {
+			return name
+		}
+		ps.next++
+		name := fmt.Sprintf("uuid-%d", ps.next)
+		ps.names[key] = name
+		return name
+	})
 }
 
 // redactJSON redacts a JSON fragment structurally when it parses (so secret
@@ -3616,11 +4015,15 @@ func escape(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "|", `\|`), "\n", " ")
 }
 
+// cellRunes is the longest table cell, in characters (not bytes, so a cut
+// never splits a multi-byte character).
+const cellRunes = 120
+
 // cell escapes and shortens long JSON fragments for the change table.
 func cell(s string) string {
 	s = escape(s)
-	if len(s) > 120 {
-		s = s[:117] + "..."
+	if r := []rune(s); len(r) > cellRunes {
+		s = string(r[:cellRunes-3]) + "..."
 	}
 	return s
 }
@@ -3665,7 +4068,7 @@ func (rep Report) EvidenceRow() string {
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cd deckformat && go test ./observe/`
-Expected: `ok`.
+Expected: `ok`. `TestReportsCarryNoRealIDs` and `TestCellCutsCharactersNotBytes` each carry a known-bad control (the raw diff does contain UUIDs; a byte cut does split a character), so neither can pass vacuously.
 
 - [ ] **Step 5: Commit**
 
@@ -4141,7 +4544,7 @@ Issue: "schrodeck: identity, read-only macOS connector, inventory/status/doctor/
 
 **Files:**
 - Create: `internal/identity/identity.go`, `internal/identity/identity_test.go`
-- Modify: `docs/contracts/store-format.md` (define the namespace and the folder's letter case)
+- Modify: `docs/contracts/store-format.md` (define the namespace and the folder's letter case), `docs/adr/0026-profile-identity.md` (link to that definition)
 
 **Interfaces:**
 - Consumes: `ports.HostIdentity`, `fake.HostIdentity` (tests).
@@ -4326,10 +4729,14 @@ In `docs/contracts/store-format.md`, directly after the paragraph that starts ``
 
 `` `NAMESPACE_SCHRODECK` = `uuid5(NameSpace_URL, "https://github.com/csmarshall/schrodeck/ns/v1")` = `5a7d742c-c29c-52c8-b996-ed8ccdcb83f8` (RFC 9562 name-based UUIDs). It is derived from that URL rather than chosen at random, and the URL carries a version: a different namespace would change every `copy_id` and canonical folder, so it can only change with a store `FORMAT` migration. The canonical folder name is that UUID in **upper case** plus `.sdProfile`, matching how the app names profile folders. Implemented in `internal/identity`. ``
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Point ADR 0026 at the definition**
+
+ADR 0026 uses `NAMESPACE_SCHRODECK` and the canonical folder, so it links to where both are now defined. In `docs/adr/0026-profile-identity.md`, after the sentence `The name is deterministic, so a host that loses its local state can rebuild the mapping by recomputing the names.` add: `` `NAMESPACE_SCHRODECK`'s value (derived from a versioned URL) and the rule that the folder name is the UUID in upper case plus `.sdProfile` are defined in [contract D](../contracts/store-format.md) and implemented in `internal/identity`. `` and append to the end of the `Status:` paragraph: `` Revised 2026-10-02 (M1, implementation): `NAMESPACE_SCHRODECK` is derived, not random, and the canonical folder name is upper case; both are defined in contract D. ``
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/identity docs/contracts/store-format.md
+git add internal/identity docs/contracts/store-format.md docs/adr/0026-profile-identity.md
 git commit -m "feat(#<n>): identity: host_id, derived NAMESPACE_SCHRODECK, copy_id, canonical folder"
 ```
 
@@ -4339,17 +4746,17 @@ git commit -m "feat(#<n>): identity: host_id, derived NAMESPACE_SCHRODECK, copy_
 
 **Files:**
 - Create: `internal/decks/decks.go`, `internal/decks/decks_test.go`, `internal/host/host.go`, `internal/connector/macos/parse.go`, `internal/connector/macos/parse_test.go`, `internal/connector/macos/macos_darwin.go`, `internal/connector/macos/macos_darwin_test.go`, `internal/connector/connector_darwin.go`, `internal/connector/connector_other.go`
-- Modify: `go.mod`, `go.sum` (require `deckformat` through a `replace`, add `howett.net/plist`), `docs/contracts/os-connector.md` (`DeviceRecords` record shape)
+- Modify: `go.mod`, `go.sum` (require `deckformat` through a `replace`, add `howett.net/plist`), `docs/contracts/os-connector.md` (`DeviceRecords` record shape, geometry keying), `docs/adr/0003-decks-are-local-geometry-compatibility.md` (geometry keying), `docs/references.md` (R8's wording)
 
 **Interfaces:**
 - Consumes: `ports.*`, `profile.LoadAll`, `conformance.HostIdentityStable`, `identity.HostID`.
 - Produces:
-  - package `decks`: `RecordKey = "_key"`, `RecordRaw = "_raw"`, `KnownGeometry map[[2]int]ports.Geometry` (empty until Task 12 adds evidenced rows), `ParseKey(key) (virtual bool, vendor, product int, serial string, ok bool)`, `Enumerate(records []map[string]any, profiles []*profile.Profile, known map[[2]int]ports.Geometry) []ports.Deck`, `Status{ports.Deck; GeometryKnown, KeyUnique bool}` with `Destination() bool`, `Annotate([]ports.Deck) []Status`.
+  - package `decks`: `RecordKey = "_key"`, `RecordRaw = "_raw"`; `TypeInfo{Name string; Keys, Dials int; Variable bool; Columns, Rows int}`; `DeviceTypes map[int]TypeInfo` (Elgato's DeviceType enumeration with the documented key and dial counts, R8; `Columns`/`Rows` zero until observed); `ProductTypes map[[2]int]int` (USB vendor/product → DeviceType, empty until Task 12 adds observed rows); `KnownGeometry() map[[2]int]ports.Geometry` (derived from the two); `Validate(types map[int]TypeInfo, products map[[2]int]int) error`; `ParseKey(key) (virtual bool, vendor, product int, serial string, ok bool)`; `Enumerate(records []map[string]any, profiles []*profile.Profile, known map[[2]int]ports.Geometry) []ports.Deck`; `Unmatched(records []map[string]any, profiles []*profile.Profile) (profilesWithoutDeck, decksWithoutProfile []string)`; `Status{ports.Deck; GeometryKnown, KeyUnique bool}` with `Destination() bool`; `Annotate([]ports.Deck) []Status`.
   - package `host`: `AppPresence interface{ Installed() (bool, error); Running() (bool, error) }`; `Host{Paths ports.Paths; Identity ports.HostIdentity; Prefs ports.AppPrefs; Decks ports.DeviceEnumerator; App AppPresence; HostNames []string; Now func() time.Time; Sleep func(time.Duration)}`.
   - package `macos`: pure helpers `ParseIOPlatformUUID`, `DropboxPaths`, `Plain`, `DeviceRecords(prefs map[string]any)`, `Preferred(prefs, id)`; on darwin `New() (*Connector, error)` implementing `ports.Paths`, `ports.HostIdentity`, `ports.AppPrefs`, `ports.DeviceEnumerator`, `host.AppPresence`, plus `HostNames() []string`.
   - package `connector`: `New() (*host.Host, error)` (darwin: the macOS connector; elsewhere an error saying there is no connector yet).
 
-The geometry table starts **empty** on purpose. Neither the prefs nor the manifests carry a key grid, so the table cannot be derived; a row is a claim about a product, and it is added only in Task 12 with an evidence row. Until then every deck is reported as "geometry not verified", which is the fail-closed answer. `AppControl.Quit`/`Launch` are not implemented: M1 never restarts the app, so the macOS connector implements only the read-only half that `host.AppPresence` names.
+**Geometry follows ADR 0003: it comes from Elgato's DeviceType table (R8), not from counting keys by eye.** R8 documents each DeviceType's **key count and dial count** (`DeviceTypes` carries them verbatim). Two things are not on disk and not in R8, so they are observed in Task 12, each with an evidence row: which DeviceType a USB product is (`ProductTypes`; neither the prefs nor the manifests record it), and how a type's keys are arranged into columns × rows (R8 gives the count; the SDK reports a connected device's `columns` and `rows` at runtime, but the docs do not tabulate them). `Validate` ties the observed part to the documented part: a grid must multiply to the documented key count, and a mapped product's type must have a grid. Until Task 12 adds rows, every deck is reported as "geometry not verified", which is the fail-closed answer. Virtual decks stay in scope (ADR 0003): their grid is user-chosen and where the app stores it is unknown (U8), so they are "geometry not verified" until U8 is settled, not excluded. `AppControl.Quit`/`Launch` are not implemented: M1 never restarts the app, so the macOS connector implements only the read-only half that `host.AppPresence` names.
 
 Prefs are read with `defaults export com.elgato.StreamDeck -`, which goes through `cfprefsd` and so sees what the running app last wrote; reading the `.plist` file directly can be stale while the app runs.
 
@@ -4429,11 +4836,64 @@ func TestEnumerateAndAnnotate(t *testing.T) {
 	}
 }
 
-func TestKnownGeometryHasOnlyEvidencedRows(t *testing.T) {
-	for k, g := range KnownGeometry {
-		if g.Columns <= 0 || g.Rows <= 0 {
-			t.Errorf("row %v has no grid", k)
-		}
+// ADR 0003's check: a DeviceType the tables use without columns/rows fails.
+func TestGeometryTablesAreConsistent(t *testing.T) {
+	if err := Validate(DeviceTypes, ProductTypes); err != nil {
+		t.Fatal(err)
+	}
+	// Known-bad: a product mapped to a type that has no observed grid.
+	if err := Validate(DeviceTypes, map[[2]int]int{{4057, 143}: 2}); err == nil {
+		t.Fatal("a mapped DeviceType without columns/rows was accepted")
+	}
+	// Known-bad: a grid that contradicts R8's documented key count.
+	bad := map[int]TypeInfo{2: {Name: "Stream Deck XL", Keys: 32, Columns: 8, Rows: 3}}
+	if err := Validate(bad, nil); err == nil {
+		t.Fatal("an 8×3 grid for a 32-key type was accepted")
+	}
+	// Known-bad: a product mapped to a type R8 does not list.
+	if err := Validate(DeviceTypes, map[[2]int]int{{4057, 1}: 99}); err == nil {
+		t.Fatal("an unknown DeviceType was accepted")
+	}
+	// Known-good: a consistent pair derives the expected geometry.
+	good := map[int]TypeInfo{2: {Name: "Stream Deck XL", Keys: 32, Columns: 8, Rows: 4}}
+	if err := Validate(good, map[[2]int]int{{4057, 143}: 2}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKnownGeometryIsDerived(t *testing.T) {
+	saveT, saveP := DeviceTypes, ProductTypes
+	t.Cleanup(func() { DeviceTypes, ProductTypes = saveT, saveP })
+	DeviceTypes = map[int]TypeInfo{7: {Name: "Stream Deck +", Keys: 8, Dials: 4, Columns: 4, Rows: 2}, 2: {Name: "Stream Deck XL", Keys: 32}}
+	ProductTypes = map[[2]int]int{{4057, 1}: 7, {4057, 2}: 2}
+	got := KnownGeometry()
+	if g := got[[2]int{4057, 1}]; g != (ports.Geometry{Columns: 4, Rows: 2, Dials: 4}) {
+		t.Errorf("+ geometry = %+v", g)
+	}
+	if _, ok := got[[2]int{4057, 2}]; ok {
+		t.Error("a type without an observed grid produced a geometry")
+	}
+}
+
+func TestUnmatched(t *testing.T) {
+	p, err := profile.Load(fixture.XL().FS(), fixture.XL().Folder())
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := []map[string]any{
+		{RecordKey: fixture.Device},
+		{RecordKey: "@(1)[4057/99/<other>]"},
+		{RecordKey: "SomethingElse", RecordRaw: "opaque"},
+	}
+	profs, decks := Unmatched(records, []*profile.Profile{p})
+	if len(profs) != 0 || len(decks) != 1 || decks[0] != "@(1)[4057/99/<other>]" {
+		t.Fatalf("matched case: %v %v", profs, decks)
+	}
+	// Known-bad for U9: a profile bound to an id that differs from every prefs
+	// key (here only in letter case) must be reported, not silently skipped.
+	profs, _ = Unmatched([]map[string]any{{RecordKey: "@(1)[4057/143/<DECK>]"}}, []*profile.Profile{p})
+	if len(profs) != 1 || profs[0] != p.Folder {
+		t.Fatalf("a profile whose Device.UUID matches no key was not reported: %v", profs)
 	}
 }
 ```
@@ -4457,7 +4917,9 @@ package decks
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 
 	"github.com/csmarshall/schrodeck/deckformat/profile"
@@ -4472,13 +4934,90 @@ const RecordKey = "_key"
 // string-valued entry); its value is kept under this member for observation.
 const RecordRaw = "_raw"
 
-// KnownGeometry maps (USB vendor, product) to the key grid. It cannot be
-// derived from anything on disk: neither the prefs nor the manifests carry a
-// geometry. Rows are added only with evidence (a docs/references.md row from
-// an observation); an unknown product has no geometry, so its deck cannot be
-// a destination (fail closed, ADRs 0003 and 0030). Virtual decks have
-// user-chosen geometry whose source is unknown (U8), so they are never in it.
-var KnownGeometry = map[[2]int]ports.Geometry{}
+// TypeInfo is one row of Elgato's DeviceType table (R8, documented): the
+// device's name, its key count (action slots, excluding dials) and its dial
+// count. Variable marks a type whose key count the user or the host chooses
+// (Mobile, Voyager, the virtual deck). R8 does not document how the keys are
+// arranged, so Columns and Rows stay zero until an observation supplies them
+// (docs/references.md), and Validate checks that Columns × Rows equals the
+// documented Keys: the grid split is observed, its product is documented.
+type TypeInfo struct {
+	Name          string
+	Keys, Dials   int
+	Variable      bool
+	Columns, Rows int
+}
+
+// DeviceTypes is Elgato's DeviceType enumeration with the documented key and
+// dial counts (R8). Only the Columns/Rows split is ever added here, and only
+// with an evidence row.
+var DeviceTypes = map[int]TypeInfo{
+	0:  {Name: "Stream Deck", Keys: 15},
+	1:  {Name: "Stream Deck Mini", Keys: 6},
+	2:  {Name: "Stream Deck XL", Keys: 32},
+	3:  {Name: "Stream Deck Mobile", Variable: true},
+	4:  {Name: "Corsair GKeys", Keys: 6},
+	5:  {Name: "Stream Deck Pedal", Keys: 3},
+	6:  {Name: "Corsair Voyager", Variable: true},
+	7:  {Name: "Stream Deck +", Keys: 8, Dials: 4},
+	8:  {Name: "SCUF Controller", Keys: 5},
+	9:  {Name: "Stream Deck Neo", Keys: 8},
+	10: {Name: "Stream Deck Studio", Keys: 32, Dials: 2},
+	11: {Name: "Virtual Stream Deck", Variable: true},
+	12: {Name: "Galleon 100 SD", Keys: 12, Dials: 2},
+	13: {Name: "Stream Deck + XL", Keys: 36, Dials: 6},
+}
+
+// ProductTypes maps a physical deck's USB (vendor, product), read from its
+// device key, to its DeviceType. Nothing on disk records the DeviceType, so
+// each row is an observation (M1 Task 12) with an evidence row; an unmapped
+// product has no geometry, so its deck cannot be a destination (fail closed,
+// ADRs 0003 and 0030). Virtual decks are in scope (ADR 0003) but have a
+// user-chosen grid whose stored location is unknown (U8); until U8 is settled
+// they have no geometry either.
+var ProductTypes = map[[2]int]int{}
+
+// KnownGeometry derives the (vendor, product) → geometry table that
+// Enumerate uses from ProductTypes and DeviceTypes. Products whose type has
+// no observed grid are left out.
+func KnownGeometry() map[[2]int]ports.Geometry {
+	out := map[[2]int]ports.Geometry{}
+	for product, typ := range ProductTypes {
+		ti, ok := DeviceTypes[typ]
+		if !ok || ti.Columns <= 0 || ti.Rows <= 0 {
+			continue
+		}
+		out[product] = ports.Geometry{Columns: ti.Columns, Rows: ti.Rows, Dials: ti.Dials}
+	}
+	return out
+}
+
+// Validate checks the two tables against each other and against R8: every
+// mapped product names a known DeviceType that has a grid, and every grid
+// multiplies to the documented key count of a fixed-size type.
+func Validate(types map[int]TypeInfo, products map[[2]int]int) error {
+	for id, ti := range types {
+		if ti.Columns == 0 && ti.Rows == 0 {
+			continue
+		}
+		if ti.Columns <= 0 || ti.Rows <= 0 {
+			return fmt.Errorf("DeviceType %d (%s): grid %d×%d is incomplete", id, ti.Name, ti.Columns, ti.Rows)
+		}
+		if !ti.Variable && ti.Columns*ti.Rows != ti.Keys {
+			return fmt.Errorf("DeviceType %d (%s): grid %d×%d does not match the documented %d keys", id, ti.Name, ti.Columns, ti.Rows, ti.Keys)
+		}
+	}
+	for product, typ := range products {
+		ti, ok := types[typ]
+		if !ok {
+			return fmt.Errorf("product %v: DeviceType %d is not in R8's table", product, typ)
+		}
+		if ti.Columns <= 0 || ti.Rows <= 0 {
+			return fmt.Errorf("product %v: DeviceType %d (%s) lacks columns/rows", product, typ, ti.Name)
+		}
+	}
+	return nil
+}
 
 var physicalKey = regexp.MustCompile(`^@\((\d+)\)\[(\d+)/(\d+)/([^\]]*)\]$`)
 
@@ -4552,6 +5091,39 @@ func Annotate(ds []ports.Deck) []Status {
 		out = append(out, Status{Deck: d, GeometryKnown: d.Geometry.Columns > 0 && d.Geometry.Rows > 0, KeyUnique: count[d.AppDeviceID] == 1})
 	}
 	return out
+}
+
+// Unmatched lists what the deck list cannot tie together: profile folders
+// whose Device.UUID equals no device key, and device keys no profile is bound
+// to (records marked RecordRaw are not devices and are ignored). Both are
+// counted by the U9 observation (is AppDeviceID always ManifestDeviceID?);
+// "equal for N of N" means both lists are empty.
+func Unmatched(records []map[string]any, profiles []*profile.Profile) (profilesWithoutDeck, decksWithoutProfile []string) {
+	keys := map[string]bool{}
+	for _, rec := range records {
+		if _, raw := rec[RecordRaw]; raw {
+			continue
+		}
+		if key, ok := rec[RecordKey].(string); ok {
+			keys[key] = true
+		}
+	}
+	bound := map[string]bool{}
+	for _, p := range profiles {
+		id := p.DeviceUUID()
+		bound[id] = true
+		if !keys[id] {
+			profilesWithoutDeck = append(profilesWithoutDeck, p.Folder)
+		}
+	}
+	for key := range keys {
+		if !bound[key] {
+			decksWithoutProfile = append(decksWithoutProfile, key)
+		}
+	}
+	sort.Strings(profilesWithoutDeck)
+	sort.Strings(decksWithoutProfile)
+	return profilesWithoutDeck, decksWithoutProfile
 }
 ```
 
@@ -4876,7 +5448,15 @@ func TestPaths(t *testing.T) {
 
 // Read-only checks against the real app; skipped where it is not installed
 // (CI runners).
+// liveEnv opts in to tests that read this Mac's real Stream Deck install
+// (read-only). They are off by default so `go test ./...` on a development
+// Mac never touches a personal install unless asked to.
+const liveEnv = "SCHRODECK_LIVE"
+
 func TestLiveReadOnly(t *testing.T) {
+	if os.Getenv(liveEnv) != "1" {
+		t.Skip("reads the real Stream Deck install; set " + liveEnv + "=1 to run")
+	}
 	c := connector(t)
 	installed, err := c.Installed()
 	if err != nil {
@@ -5096,7 +5676,7 @@ func (c *Connector) Decks() ([]ports.Deck, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decks.Enumerate(recs, res.Profiles, decks.KnownGeometry), nil
+	return decks.Enumerate(recs, res.Profiles, decks.KnownGeometry()), nil
 }
 ```
 
@@ -5158,7 +5738,7 @@ func New() (*host.Host, error) {
 - [ ] **Step 9: Tidy, test, and check the architecture rules**
 
 Run (on a Mac): `go mod tidy && go vet ./... && go test ./internal/... && go run ./tools/archcheck/cmd/archcheck -mode core -dir . && for g in linux windows; do GOOS=$g go build ./...; done`
-Expected: every package `ok`; `TestLiveReadOnly` runs where the Stream Deck app is installed and skips elsewhere (CI); `archcheck core: ok`; the cross-builds succeed (the darwin-only files are build-tagged).
+Expected: every package `ok`; `TestLiveReadOnly` is skipped (it reads the real install only with `SCHRODECK_LIVE=1`; run `SCHRODECK_LIVE=1 go test -run TestLiveReadOnly ./internal/connector/macos/` once by hand on a Mac with the app installed, and it must pass); `archcheck core: ok`; the cross-builds succeed (the darwin-only files are build-tagged).
 
 - [ ] **Step 10: Document the record shape in contract A**
 
@@ -5172,12 +5752,20 @@ with
 
 and add after the table: `Observed on macOS (2026-10-02): the \`Devices\` dictionary also holds one entry whose value is a string, not a device record. The connector keeps it visible as \`_raw\` (for observations) and the deck list skips it.`
 
-Run `go run ./tools/portcheck/cmd/portcheck` → `portcheck: 9 ports match contract A` (the comment change does not change the method set).
+In the same file, replace the `Deck` field comment `// columns, rows, dials (from Elgato's DeviceType table [R8](../references.md))` with `// columns, rows, dials: the DeviceType's documented key and dial counts (R8) with an observed grid split; see ADR 0003` and add after the `DeviceEnumerator` table: `Geometry keying (2026-10-02, M1): a physical deck's DeviceType comes from its USB (vendor, product), read from its device key, through an observed product → DeviceType map; its key and dial counts come from R8, and its columns × rows split is observed and must multiply to R8's key count. A product without an observed mapping, or a type without an observed grid, has no geometry, so the deck is not a destination.`
 
-- [ ] **Step 11: Commit**
+Run `go run ./tools/portcheck/cmd/portcheck` → `portcheck: 9 ports and 2 structs match contract A` (comment changes do not change any signature or field).
+
+- [ ] **Step 11: Record the geometry keying in ADR 0003 and correct R8's wording**
+
+In `docs/adr/0003-decks-are-local-geometry-compatibility.md`, append to the `Status:` line: `` Revised 2026-10-02 (M1, implementation): R8 documents key and dial counts per DeviceType but not the columns × rows split; a physical deck's DeviceType is found through an observed USB product → DeviceType map, and the split is observed and checked against R8's key count. Virtual decks remain in scope; their grid source (U8) is settled in M1. `` Then, in its `## Verified by` list, replace `- A geometry-table test that fails if a known DeviceType lacks columns/rows.` with `- A geometry-table test that fails if a mapped DeviceType lacks columns/rows, or if a grid does not multiply to R8's key count: \`TestGeometryTablesAreConsistent\` (M1 Task 10), with known-bad tables.`
+
+In `docs/references.md`, R8's last column currently says the enum comes "with columns × rows". Replace that cell with: `DeviceType enum (Stream Deck, Mini, XL, +, Neo, + XL, Virtual, …) with each model's key count and dial count. Columns × rows are not tabulated; the SDK reports a connected device's \`columns\` and \`rows\` at runtime. Model compatibility is derived from this plus an observed grid split (ADR 0003).`
+
+- [ ] **Step 12: Commit**
 
 ```bash
-git add go.mod go.sum internal/decks internal/host internal/connector docs/contracts/os-connector.md
+git add go.mod go.sum internal/decks internal/host internal/connector docs/contracts/os-connector.md docs/adr/0003-decks-are-local-geometry-compatibility.md docs/references.md
 git commit -m "feat(#<n>): deck enumeration and the read-only macOS connector"
 ```
 
@@ -5196,7 +5784,11 @@ git commit -m "feat(#<n>): deck enumeration and the read-only macOS connector"
   - package `doctor`: `KnownFile = "known-fingerprints.json"`; `Accepted{Digest, AppVersion string; AcceptedAt time.Time; Schema profile.Schema}`; `Known{Accepted []Accepted}` with `Contains(digest) bool`; `LoadKnown(stateDir) (Known, error)`; `SaveKnown(stateDir, Known) error` (stage + rename); `ContractB(*host.Host, profile.LoadResult) []probe.Probe` (ids `M1, M2, M5`); `Fingerprint(schema profile.Schema, digest string, known Known) probe.Probe` (id `FP`).
   - package `cli`: `Env{Stdout, Stderr io.Writer; Version string; Logger *slog.Logger; Host *host.Host}` (M0's `Checks`, `Check`, `CheckResult` and `Status*` are removed); commands `version`, `status`, `inventory [--show-ids]`, `doctor [--accept-fingerprint]`, `observe start|stop <name> [--out FILE]`, `fixture export --profile <folder> --out <dir> [--name <folder>]`; `--json` may appear anywhere after the command name, and flags may follow positional arguments.
 
-`doctor` fails until the user accepts this host's fingerprint: that is ADR 0015's "the user confirms the new fingerprint as known-good", and the only write `doctor` makes (to schrodeck's state dir). When a fingerprint is not known-good, the evidence lists the key paths that appeared or disappeared since the last accepted one.
+`doctor` fails until the user accepts this host's fingerprint: that is ADR 0015's "the user confirms the new fingerprint as known-good", and the only write `doctor` makes (to schrodeck's state dir). When a fingerprint is not known-good, the evidence lists the key paths that appeared or disappeared since the last accepted one. **`--accept-fingerprint` is refused** (reported as `accept_refused`, nothing written) unless every other check passes and every profile loaded: a profile that failed to load is missing from the fingerprint, so accepting then would bless a partial view (`TestAcceptFingerprintRefusedWhileOtherChecksFail`, with a P7 failure as the known-bad and the clean install as the control).
+
+`inventory` also reports what the deck list cannot tie together, under `unmatched`: profiles whose `Device.UUID` equals no prefs device key, and device keys no profile is bound to. That is what Task 12's U9 observation counts.
+
+The redactor every command uses is built with the serials of every device id the host knows (prefs keys and `Device.UUID`s, through `redact.SerialsFrom`), and every `--out` (and `fixture export`'s final folder) passes `pathguard.RefuseInside` against the app data root and the profiles directory before anything is read; `--name` must be a single folder name. `TestFixtureExport` and `TestObserveOutRefusesAppData` are the known-bad cases: `--out` inside `ProfilesV3`, a `../` name, a symlinked output directory, each refused with exit 2 and the profiles directory left untouched.
 
 - [ ] **Step 1: Write the doctor tests**
 
@@ -5695,6 +6287,39 @@ func TestDoctorAcceptFingerprint(t *testing.T) {
 	}
 }
 
+func TestAcceptFingerprintRefusedWhileOtherChecksFail(t *testing.T) {
+	// Known-bad P7: an unexpected file inside the profile makes the loader
+	// refuse it. Accepting now would record a fingerprint that leaves the
+	// profile out, so doctor must refuse and write nothing.
+	h := fakeHost(t)
+	stray := filepath.Join(h.Paths.ProfilesDir(), fixture.XL().Folder(), "stray.bin")
+	if err := os.WriteFile(stray, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	second := fixture.CopyOf(fixture.XL(), "second")
+	if err := fixture.WriteTo(h.Paths.ProfilesDir(), second.FS()); err != nil {
+		t.Fatal(err)
+	}
+	env, out, _ := testEnv(nil, h)
+	if code := Run(context.Background(), []string{"doctor", "--accept-fingerprint", "--json"}, env); code != ExitFail {
+		t.Fatalf("exit %d, want %d", code, ExitFail)
+	}
+	if !strings.Contains(out.String(), `"accept_refused":`) || strings.Contains(out.String(), `"accepted_now":true`) {
+		t.Fatalf("accept was not refused:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(h.Paths.StateDir(), "known-fingerprints.json")); !os.IsNotExist(err) {
+		t.Fatal("a refused accept still wrote the known-good set")
+	}
+	// Known-good control: once the install is clean, the same command accepts.
+	if err := os.Remove(stray); err != nil {
+		t.Fatal(err)
+	}
+	env, out, _ = testEnv(nil, h)
+	if code := Run(context.Background(), []string{"doctor", "--accept-fingerprint", "--json"}, env); code != ExitOK {
+		t.Fatalf("clean install: exit %d\n%s", code, out.String())
+	}
+}
+
 func TestInventoryRedactsDeviceIDsByDefault(t *testing.T) {
 	h := fakeHost(t)
 	real := "@(1)[4057/143/" + "AB12" + "CD34EF" + "]"
@@ -5712,6 +6337,34 @@ func TestInventoryRedactsDeviceIDsByDefault(t *testing.T) {
 	Run(context.Background(), []string{"inventory", "--json", "--show-ids"}, env)
 	if !strings.Contains(out.String(), "CD34EF") {
 		t.Fatal("--show-ids did not show the id")
+	}
+}
+
+func TestInventoryReportsUnmatched(t *testing.T) {
+	h := fakeHost(t)
+	prefs := h.Prefs.(fake.Prefs)
+	other := "@(1)[4057/99/" + "ZZ98" + "YY76" + "]"
+	prefs.Records = append(prefs.Records, map[string]any{decks.RecordKey: other})
+	h.Prefs = prefs
+	env, out, _ := testEnv(nil, h)
+	Run(context.Background(), []string{"inventory", "--json"}, env)
+	var doc struct {
+		Data struct {
+			Unmatched *struct {
+				Profiles []string `json:"profiles"`
+				Decks    []string `json:"decks"`
+			} `json:"unmatched"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	u := doc.Data.Unmatched
+	if u == nil || len(u.Decks) != 1 || len(u.Profiles) != 0 {
+		t.Fatalf("unmatched = %+v\n%s", u, out.String())
+	}
+	if strings.Contains(out.String(), "YY76") || u.Decks[0] != "@(1)[4057/99/<deck>]" {
+		t.Fatalf("unmatched deck key not redacted: %q", u.Decks[0])
 	}
 }
 
@@ -5775,6 +6428,53 @@ func TestFixtureExport(t *testing.T) {
 	inside := filepath.Join(h.Paths.ProfilesDir(), "x")
 	if code := Run(context.Background(), []string{"fixture", "export", "--profile", fixture.XL().Folder(), "--out", inside}, env); code == ExitOK {
 		t.Fatal("export into the app's data was allowed")
+	}
+	// Known-bad: --name walking out of --out and into the app's data.
+	escape := filepath.Join("..", "app", "ProfilesV3", "N.sdProfile")
+	env, _, _ = testEnv(nil, h)
+	if code := Run(context.Background(), []string{"fixture", "export", "--profile", fixture.XL().Folder(), "--out", filepath.Join(filepath.Dir(h.Paths.AppDataRoot()), "fx2"), "--name", escape}, env); code != ExitUsage {
+		t.Fatalf("a ../ --name was not refused as a usage error: exit %d", code)
+	}
+	// Known-bad: --out is a symlink into the app's data.
+	link := filepath.Join(t.TempDir(), "looks-safe")
+	if err := os.Symlink(h.Paths.ProfilesDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	env, _, _ = testEnv(nil, h)
+	if code := Run(context.Background(), []string{"fixture", "export", "--profile", fixture.XL().Folder(), "--out", link}, env); code != ExitUsage {
+		t.Fatalf("export through a symlink into the app's data: exit %d", code)
+	}
+	assertAppDataUntouched(t, h)
+}
+
+// assertAppDataUntouched fails if the profiles directory holds anything but
+// the one fixture profile the fake host was created with.
+func assertAppDataUntouched(t *testing.T, h *host.Host) {
+	t.Helper()
+	entries, err := os.ReadDir(h.Paths.ProfilesDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != fixture.XL().Folder() {
+		t.Fatalf("the app's profiles directory was written to: %v", entries)
+	}
+}
+
+func TestObserveOutRefusesAppData(t *testing.T) {
+	h := fakeHost(t)
+	env, _, _ := testEnv(nil, h)
+	if code := Run(context.Background(), []string{"observe", "start", "u0-guard"}, env); code != ExitOK {
+		t.Fatal("start failed")
+	}
+	inside := filepath.Join(h.Paths.ProfilesDir(), "report.md")
+	env, _, errb := testEnv(nil, h)
+	if code := Run(context.Background(), []string{"observe", "stop", "u0-guard", "--out", inside}, env); code != ExitUsage {
+		t.Fatalf("observe stop --out inside the app's data: exit %d %s", code, errb.String())
+	}
+	assertAppDataUntouched(t, h)
+	// The refused stop must not have consumed the observation.
+	if _, err := os.Stat(filepath.Join(h.Paths.StateDir(), "observe", "u0-guard")); err != nil {
+		t.Fatal("a refused stop deleted the started observation")
 	}
 }
 
@@ -6164,7 +6864,36 @@ func redactor(env Env) (*redact.Redactor, error) {
 			}
 		}
 	}
-	return redact.New(redact.Options{UserNames: users, HostNames: hosts})
+	var serials []string
+	for _, s := range redact.SerialsFrom(deviceIDs(env)...) {
+		if len(s) >= 3 {
+			serials = append(serials, s)
+		}
+	}
+	return redact.New(redact.Options{UserNames: users, HostNames: hosts, Serials: serials})
+}
+
+// deviceIDs lists every device id this host knows of: the prefs device keys
+// and each profile's Device.UUID. Their serials are redacted wherever they
+// appear, including outside a device id (a plugin setting, a prefs field).
+func deviceIDs(env Env) []string {
+	if env.Host == nil {
+		return nil
+	}
+	var ids []string
+	if recs, err := env.Host.Prefs.DeviceRecords(); err == nil {
+		for _, r := range recs {
+			if k, ok := r[decks.RecordKey].(string); ok {
+				ids = append(ids, k)
+			}
+		}
+	}
+	if res, err := profile.LoadAll(os.DirFS(env.Host.Paths.ProfilesDir())); err == nil {
+		for _, p := range res.Profiles {
+			ids = append(ids, p.DeviceUUID())
+		}
+	}
+	return ids
 }
 
 type versionData struct {
@@ -6276,6 +7005,14 @@ type inventoryData struct {
 	Decks       []deckInfo    `json:"decks"`
 	Profiles    []profileInfo `json:"profiles"`
 	LoadErrors  []string      `json:"load_errors,omitempty"`
+	Unmatched   *unmatched    `json:"unmatched,omitempty"`
+}
+
+// unmatched is what the deck list cannot tie together (the U9 observation):
+// profiles bound to no device key, and device keys no profile is bound to.
+type unmatched struct {
+	Profiles []string `json:"profiles,omitempty"`
+	Decks    []string `json:"decks,omitempty"`
 }
 
 func runInventory(_ context.Context, env Env, args []string) (result, error) {
@@ -6343,6 +7080,15 @@ func runInventory(_ context.Context, env Env, args []string) (result, error) {
 			d.Fingerprint, _ = schema.Digest()
 		}
 	}
+	if recs, err := h.Prefs.DeviceRecords(); err == nil {
+		profs, keys := decks.Unmatched(recs, res.Profiles)
+		for i := range keys {
+			keys[i] = show(keys[i])
+		}
+		if len(profs) > 0 || len(keys) > 0 {
+			d.Unmatched = &unmatched{Profiles: profs, Decks: keys}
+		}
+	}
 
 	var text strings.Builder
 	fmt.Fprintf(&text, "host %s · app %s · norm_version %d · fingerprint %s\n\ndecks:\n", d.HostID, orUnknown(d.AppVersion), d.NormVersion, short(d.Fingerprint))
@@ -6360,6 +7106,14 @@ func runInventory(_ context.Context, env Env, args []string) (result, error) {
 	for _, e := range d.LoadErrors {
 		fmt.Fprintf(&text, "  NOT LOADED: %s\n", e)
 	}
+	if u := d.Unmatched; u != nil {
+		for _, f := range u.Profiles {
+			fmt.Fprintf(&text, "  UNMATCHED profile (its Device.UUID is no device key): %s\n", f)
+		}
+		for _, k := range u.Decks {
+			fmt.Fprintf(&text, "  UNMATCHED deck (no profile is bound to it): %s\n", k)
+		}
+	}
 	return result{data: d, text: text.String(), failed: len(d.LoadErrors) > 0}, nil
 }
 
@@ -6374,10 +7128,12 @@ func short(s string) string {
 }
 
 type doctorData struct {
-	Tier        string         `json:"tier"`
-	Fingerprint string         `json:"fingerprint,omitempty"`
-	Accepted    bool           `json:"accepted_now,omitempty"`
-	Checks      []probe.Result `json:"checks"`
+	Tier        string `json:"tier"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Accepted    bool   `json:"accepted_now,omitempty"`
+	// AcceptRefused says why --accept-fingerprint did not record anything.
+	AcceptRefused string         `json:"accept_refused,omitempty"`
+	Checks        []probe.Result `json:"checks"`
 }
 
 func runDoctor(ctx context.Context, env Env, args []string) (result, error) {
@@ -6401,6 +7157,11 @@ func runDoctor(ctx context.Context, env Env, args []string) (result, error) {
 	probes := append(doctor.ContractB(h, res), probe.ContractC(probe.Install{Load: res, Home: h.Paths.Home()})...)
 
 	d := doctorData{Tier: probe.ReadOnly.String()}
+	// Every other check runs first: ADR 0015's "the user confirms the new
+	// fingerprint as known-good" is only offered on an install that otherwise
+	// passes, and with every profile loaded (a profile that failed to load is
+	// missing from the fingerprint, so accepting would bless a partial view).
+	d.Checks = probe.RunAll(ctx, probes, probe.ReadOnly)
 	if len(res.Profiles) > 0 {
 		schema, err := profile.SchemaOf(res.Profiles)
 		if err != nil {
@@ -6416,17 +7177,25 @@ func runDoctor(ctx context.Context, env Env, args []string) (result, error) {
 			return result{}, err
 		}
 		if *accept && !known.Contains(digest) {
-			version, _ := h.Prefs.AppVersion()
-			known.Accepted = append(known.Accepted, doctor.Accepted{Digest: digest, AppVersion: version, AcceptedAt: now(h), Schema: schema})
-			if err := doctor.SaveKnown(h.Paths.StateDir(), known); err != nil {
-				return result{}, err
+			switch {
+			case len(res.Errors) > 0:
+				d.AcceptRefused = fmt.Sprintf("%d profile(s) did not load; fix them first, the fingerprint would leave them out", len(res.Errors))
+			case probe.Failed(d.Checks):
+				d.AcceptRefused = "another check failed; a fingerprint is accepted only when every other check passes"
+			default:
+				version, _ := h.Prefs.AppVersion()
+				known.Accepted = append(known.Accepted, doctor.Accepted{Digest: digest, AppVersion: version, AcceptedAt: now(h), Schema: schema})
+				if err := doctor.SaveKnown(h.Paths.StateDir(), known); err != nil {
+					return result{}, err
+				}
+				d.Accepted = true
 			}
-			d.Accepted = true
 		}
-		probes = append(probes, doctor.Fingerprint(schema, digest, known))
+		d.Checks = append(d.Checks, probe.RunAll(ctx, []probe.Probe{doctor.Fingerprint(schema, digest, known)}, probe.ReadOnly)...)
+	} else if *accept {
+		d.AcceptRefused = "no profile loaded, so there is no fingerprint to accept"
 	}
 
-	d.Checks = probe.RunAll(ctx, probes, probe.ReadOnly)
 	var text strings.Builder
 	for i := range d.Checks {
 		c := &d.Checks[i]
@@ -6441,6 +7210,9 @@ func runDoctor(ctx context.Context, env Env, args []string) (result, error) {
 	}
 	if d.Accepted {
 		fmt.Fprintf(&text, "Recorded fingerprint %s as known-good for this host.\n", short(d.Fingerprint))
+	}
+	if d.AcceptRefused != "" {
+		fmt.Fprintf(&text, "Fingerprint NOT accepted: %s.\n", d.AcceptRefused)
 	}
 	return result{data: d, text: text.String(), failed: probe.Failed(d.Checks)}, nil
 }
@@ -6476,6 +7248,7 @@ import (
 
 	"github.com/csmarshall/schrodeck/deckformat/jsondoc"
 	"github.com/csmarshall/schrodeck/deckformat/observe"
+	"github.com/csmarshall/schrodeck/deckformat/pathguard"
 	"github.com/csmarshall/schrodeck/deckformat/profile"
 	"github.com/csmarshall/schrodeck/deckformat/redact"
 )
@@ -6520,6 +7293,16 @@ func snapshot(env Env) (*observe.Snapshot, error) {
 	return observe.Settle(take, func() { sleep(settleInterval) }, settleTries)
 }
 
+// refuseAppData refuses a write target inside the Stream Deck app's data
+// (M1 never writes there). Both the app data root and the profiles directory
+// are protected, in case a connector places them apart.
+func refuseAppData(env Env, target string) error {
+	if err := pathguard.RefuseInside(target, env.Host.Paths.AppDataRoot(), env.Host.Paths.ProfilesDir()); err != nil {
+		return usageError{err.Error()}
+	}
+	return nil
+}
+
 type observeData struct {
 	Name     string          `json:"name"`
 	Snapshot string          `json:"snapshot,omitempty"`
@@ -6543,6 +7326,12 @@ func runObserve(_ context.Context, env Env, args []string) (result, error) {
 	}
 	if env.Host == nil {
 		return result{}, errNoHost
+	}
+	if *out != "" {
+		// Checked before anything is read, so a bad --out costs nothing.
+		if err := refuseAppData(env, *out); err != nil {
+			return result{}, err
+		}
 	}
 	dir := observeDir(env, name)
 
@@ -6620,8 +7409,11 @@ func runFixture(_ context.Context, env Env, args []string) (result, error) {
 	if folder == "" {
 		folder = *src
 	}
-	if !strings.HasSuffix(folder, profile.Suffix) {
-		return result{}, usageError{"--name must end in " + profile.Suffix}
+	if pathguard.SingleName(folder) != nil || !strings.HasSuffix(folder, profile.Suffix) {
+		return result{}, usageError{"--name must be a single folder name ending in " + profile.Suffix}
+	}
+	if err := refuseAppData(env, filepath.Join(*out, folder)); err != nil {
+		return result{}, err
 	}
 	root := env.Host.Paths.ProfilesDir()
 	p, err := profile.Load(os.DirFS(root), *src)
@@ -6709,8 +7501,8 @@ In `docs/contracts/cli-json.md`, add to § Rules: `- Enumerations (for example a
 |---|---|
 | `version` | `{schrodeck_version}` |
 | `status` | `{schrodeck_version, host?: {host_id, app: {installed, running, version?}, decks, profiles}}`; `host` is absent on an OS without a connector |
-| `inventory` | `{host_id, app_version?, norm_version, fingerprint?, decks: [{key, model?, columns?, rows?, dials?, virtual, destination, why?}], profiles: [{folder, name, device, pages, hash?, hash_error?, app_identifier?}], load_errors?}`; device ids are redacted unless `--show-ids` |
-| `doctor` | `{tier, fingerprint?, accepted_now?, checks: [{id, contract, tier, status, detail?, evidence?}]}`, `status` ∈ `pass` \| `fail` \| `skip` \| `info`; `ok` is false when any check fails |
+| `inventory` | `{host_id, app_version?, norm_version, fingerprint?, decks: [{key, model?, columns?, rows?, dials?, virtual, destination, why?}], profiles: [{folder, name, device, pages, hash?, hash_error?, app_identifier?}], load_errors?, unmatched?: {profiles?, decks?}}`; device ids are redacted unless `--show-ids` |
+| `doctor` | `{tier, fingerprint?, accepted_now?, accept_refused?, checks: [{id, contract, tier, status, detail?, evidence?}]}`, `status` ∈ `pass` \| `fail` \| `skip` \| `info`; `ok` is false when any check fails; `accept_refused` says why `--accept-fingerprint` recorded nothing |
 | `observe` | `{name, snapshot?: "taken", report?: {name, before, after, app_version, changes: [{profile, where, path, kind, before?, after?}]}, written?}` |
 | `fixture` | `{folder, out, strings}` (`strings`: every remaining string, for human review) |
 ```
@@ -6721,7 +7513,7 @@ Run:
 
 ```bash
 go mod tidy && (cd deckformat && go mod tidy) \
- && tools/ci/selftest.sh && git add -A && tools/ci/check-headers.sh && tools/ci/check-gofmt.sh && tools/ci/leak-scan.sh \
+ && tools/ci/selftest.sh && git add go.mod go.sum cmd internal docs/contracts/cli-json.md && tools/ci/check-headers.sh && tools/ci/check-gofmt.sh && tools/ci/leak-scan.sh \
  && go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./... \
  && (cd deckformat && go vet ./... && go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...) \
  && go run ./tools/archcheck/cmd/archcheck -mode core -dir . \
@@ -6742,12 +7534,13 @@ go build -o /tmp/schrodeck-m1 ./cmd/schrodeck
 /tmp/schrodeck-m1 doctor; echo "exit $?"
 ```
 
-Expected: `status` shows the host id, the app version and the deck and profile counts; `inventory` lists every deck with `destination=false` ("geometry not verified for this model yet", until Task 12) and every profile with a hash and no `NOT LOADED` line; `doctor` passes M1, M2 (or `info` for a virtual deck, U4), M5, P1–P9+P11 and fails only `FP` (not yet accepted), exit 1. This was run on the development Mac on 2026-10-02 with exactly that result. Do not accept the fingerprint yet: Task 12 does that deliberately, first.
+Expected: `status` shows the host id, the app version and the deck and profile counts; `inventory` lists every deck with `destination=false` ("geometry not verified for this model yet", until Task 12), every profile with a hash and no `NOT LOADED` line, and an `UNMATCHED deck` line for any deck no profile is bound to; `doctor` passes M1, M2 (or `info` for a virtual deck, U4), M5, P1–P9+P11 and fails only `FP` (not yet accepted), exit 1. This was run on the development Mac on 2026-10-02 with exactly that result. Do not accept the fingerprint yet: Task 12 does that deliberately, first.
 
 - [ ] **Step 13: Commit, push, PR, merge** (as in Task 3 step 6)
 
 ```bash
-git add -A
+git add go.mod go.sum cmd internal docs/contracts/cli-json.md
+git status --short   # nothing else may be listed as staged; untracked *.log files are ignored
 git commit -m "feat(#<n>): read-only doctor, inventory, status, observe and fixture export on macOS"
 ```
 
@@ -6755,123 +7548,235 @@ git commit -m "feat(#<n>): read-only doctor, inventory, status, observe and fixt
 
 ### Task 12: Settle the format unknowns on a real Mac
 
-Issue: "Settle format unknowns on a real Mac (U1–U10, P8, P10, P11, F1, geometry)" (new worktree `<n>-observations`). This task is a set of manual observation procedures run by the owner on the development Mac, followed by documentation updates in one PR. Each observation is: start a snapshot, do exactly one thing in the Stream Deck app, stop, read the redacted report. schrodeck never writes the app's files; every change on disk is made by the app itself, through its normal UI.
+Issue: "Settle format unknowns on a real Mac (U1–U10, P8, P10, P11, F1, geometry; issues #1, #2)" (new worktree `<n>-observations`). This task is a set of manual observation procedures run by the owner on the development Mac, followed by documentation updates in one PR. Each observation is: start a snapshot, do exactly one thing in the Stream Deck app, stop, read the redacted, pseudonymized report. schrodeck never writes the app's files; every change on disk is made by the app itself, through its normal UI.
 
-Unknowns are those of [docs/streamdeck-config-model.md](../../streamdeck-config-model.md) § Unknowns (U1–U6, P9 there = P11 here) and [contract C](../../contracts/profile-format.md) (P8, P10, P11), plus four found while writing this plan: **U7** (the non-record entry in prefs `Devices`), **U8** (where a virtual deck's grid size is stored), **U9** (whether `AppDeviceID` always equals `ManifestDeviceID`, contract A says unverified), **U10** (whether multi-action children carry their own `ActionID`s, which the strip list does not reach), and **F1** (whether the ADR 0015 fingerprint stays put under ordinary edits).
+Unknowns are those of [docs/streamdeck-config-model.md](../../streamdeck-config-model.md) § Unknowns (U1–U6, P9 there = P11 here) and [contract C](../../contracts/profile-format.md) (P8, P10, P11), plus four found while writing this plan: **U7** (the non-record entry in prefs `Devices`), **U8** (where a virtual deck's grid size is stored), **U9** (whether `AppDeviceID` always equals `ManifestDeviceID`, contract A says unverified), **U10** (whether multi-action children carry their own `ActionID`s, which the strip list does not reach), and **F1** (whether the ADR 0015 fingerprint stays put under ordinary edits). Two open issues are observations of the same kind and are settled here too: **#2** (can a deck's profile be edited while the deck is not attached?) and, when the second Mac is available, **#1** (is `Device.UUID` identical for the same deck on every Mac?).
 
 **Files:**
-- Create: `docs/observations/<name>.md` (one per observation, redacted reports)
-- Modify: `internal/decks/decks.go` (`KnownGeometry` rows), `internal/decks/decks_test.go`, `docs/references.md` (new rows R22 onward), `docs/contracts/profile-format.md` (P8, P10, P11 rows), `docs/contracts/client-os.md` (verified-versions row), `docs/streamdeck-config-model.md` (unknowns table), and `docs/contracts/os-connector.md` (U9 sentence) as the findings dictate
+- Create: `tools/observe-m1.sh` (the procedure runner), `docs/observations/<name>.md` (one per observation, redacted reports)
+- Modify: `internal/decks/decks.go` (`ProductTypes` rows and `DeviceTypes` grid splits), `internal/decks/decks_test.go`, `docs/references.md` (new rows R22 onward), `docs/contracts/profile-format.md` (P8, P10, P11 rows), `docs/contracts/client-os.md` (verified-versions row), `docs/streamdeck-config-model.md` (unknowns table), and `docs/contracts/os-connector.md` (U9 sentence) as the findings dictate
 
-Every command the owner runs is logged: commands below already carry the `tee` suffix from the global rules. Build the binary first:
+**Safety rules for every step:**
+- **Throwaway profiles only.** Before the first observation, make an Elgato backup in the app (Preferences → Backup). Every edit below happens on a profile created for this task and named `schrodeck-m1-scratch` (one per deck that is observed; U2 creates the first one), never on a profile in real use. Step 12 deletes them.
+- **Logs never enter the repository.** `tools/observe-m1.sh` tees every command to a timestamped log in `~/work/claude/schrodeck-logs/` (it refuses a log directory inside the repository), `*.log` is in `.gitignore` (M0 Task 1), and every `git add` below names its paths.
+- `inventory` is only ever run without `--show-ids`: the vendor and product numbers this task needs are kept in the redacted key (`@(1)[4057/143/<deck>]`).
+
+- [ ] **Step 1: Write the procedure runner and build the binary**
+
+`tools/observe-m1.sh`:
+
+```bash
+#!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Runs the M1 observations (docs/superpowers/plans/2026-10-02-m1-format-toolkit.md,
+# Task 12) against this Mac's real Stream Deck app. schrodeck only reads: every
+# change on disk is made by the app, through its UI, by the person running this.
+# Every command's output is teed to a timestamped log OUTSIDE the repository
+# ($SCHRODECK_LOG_DIR, default ~/work/claude/schrodeck-logs): logs from a real
+# machine hold profile names, host ids and paths, and must never be committed.
+#
+# Run with no arguments for usage.
+unset TMOUT
+set -euo pipefail
+
+usage() {
+	cat >&2 <<'EOF'
+usage: tools/observe-m1.sh observe <name> "<the one thing to do in the app>"
+       tools/observe-m1.sh baseline           doctor, then doctor --accept-fingerprint
+       tools/observe-m1.sh doctor <label>     doctor, logged
+       tools/observe-m1.sh inventory <label>  inventory (device ids redacted), logged
+env:   SCHRODECK_BIN (default /tmp/schrodeck-m1), SCHRODECK_LOG_DIR
+EOF
+	exit 2
+}
+
+bin=${SCHRODECK_BIN:-/tmp/schrodeck-m1}
+top=$(git rev-parse --show-toplevel 2>/dev/null) || {
+	echo "observe-m1: run this from inside the schrodeck worktree" >&2
+	exit 2
+}
+repo=$(cd "$top" && pwd -P)
+mkdir -p "${SCHRODECK_LOG_DIR:-$HOME/work/claude/schrodeck-logs}"
+# Resolved through symlinks, so /tmp vs /private/tmp cannot hide a log dir
+# that is really inside the repository.
+logdir=$(cd "${SCHRODECK_LOG_DIR:-$HOME/work/claude/schrodeck-logs}" && pwd -P)
+case "$logdir" in
+"$repo" | "$repo"/*)
+	echo "observe-m1: the log directory $logdir is inside the repository; set SCHRODECK_LOG_DIR outside it" >&2
+	exit 2
+	;;
+esac
+[[ -x "$bin" ]] || {
+	echo "observe-m1: $bin not found; build it with: go build -o $bin ./cmd/schrodeck" >&2
+	exit 2
+}
+
+# run <log-label> <command...>: runs the command, tees its output to a fresh
+# log, prints and returns its exit status (a failing doctor is often expected).
+run() {
+	local label=$1
+	shift
+	local file
+	file="$logdir/${label}_$(date +"%F-%H%M.%S").log"
+	set +e
+	"$@" 2>&1 | tee "$file"
+	local status=${PIPESTATUS[0]}
+	set -e
+	echo "[exit $status; log: $file]"
+	return 0
+}
+
+[[ $# -ge 1 ]] || usage
+case "$1" in
+observe)
+	[[ $# -eq 3 ]] || usage
+	name=$2 what=$3
+	mkdir -p "$repo/docs/observations"
+	run "observe-start-$name" "$bin" observe start "$name"
+	echo
+	echo ">>> In the Stream Deck app, on a THROWAWAY profile only: $what"
+	echo ">>> Do exactly that one thing, wait a few seconds, then press Enter."
+	read -r _
+	run "observe-stop-$name" "$bin" observe stop "$name" --out "$repo/docs/observations/$name.md"
+	;;
+baseline)
+	[[ $# -eq 1 ]] || usage
+	run doctor-baseline "$bin" doctor
+	run doctor-accept "$bin" doctor --accept-fingerprint
+	;;
+doctor | inventory)
+	[[ $# -eq 2 ]] || usage
+	run "$1-$2" "$bin" "$1"
+	;;
+*)
+	usage
+	;;
+esac
+```
 
 ```bash
 cd ~/work/claude/schrodeck-worktrees/<n>-observations
+chmod +x tools/observe-m1.sh && tools/ci/check-headers.sh tools/observe-m1.sh
 go build -o /tmp/schrodeck-m1 ./cmd/schrodeck
-mkdir -p docs/observations
 ```
 
-Before starting, make an Elgato backup in the app (Preferences → Backup), so any profile created for an observation can be thrown away with confidence.
+Check it refuses a log directory inside the repository (known-bad): `SCHRODECK_LOG_DIR=$PWD/logs tools/observe-m1.sh doctor x; echo "exit $?"` must print the refusal and `exit 2`.
 
-- [ ] **Step 1: Baseline and fingerprint (F1, part 1)**
+- [ ] **Step 2: Baseline and fingerprint (F1, part 1)**
 
 ```bash
-/tmp/schrodeck-m1 doctor 2>&1 | tee doctor-baseline_$(date +"%F-%H%M.%S").log
-/tmp/schrodeck-m1 doctor --accept-fingerprint 2>&1 | tee doctor-accept_$(date +"%F-%H%M.%S").log
+tools/observe-m1.sh baseline
 ```
 
-Record the accepted fingerprint (first 12 characters) and the app version for contract B's verified-versions row: `| macOS 27 | 7.5.1 | 3.0 | <fingerprint> | M1, M2, M5, P1–P3, P6–P9, P11 (doctor read-only tier); P4/M3/M4 not yet run | <date> |`.
+The first `doctor` must fail only `FP`; the second records the fingerprint (it is refused, and says why, if any other check fails: fix that first). Record the accepted fingerprint (first 12 characters) and the app version for contract B's verified-versions row: `| macOS 27 | 7.5.1 | 3.0 | <fingerprint> | M1, M2, M5, P1–P3, P6–P9, P11 (doctor read-only tier); P4/M3/M4 not yet run | <date> |`.
 
-- [ ] **Step 2: Geometry (deck model → key grid)**
+- [ ] **Step 3: Geometry (USB product → DeviceType, and each type's grid split)**
 
-For each physical deck: read its row in `/tmp/schrodeck-m1 inventory --show-ids` **in the terminal only** (never paste the output anywhere: it contains serials), note the vendor/product numbers in its key (`@(1)[vendor/product/…]`) and count the key grid the app shows for that deck. Add one row per confirmed product to `KnownGeometry` in `internal/decks/decks.go`, with the reference id in a comment, for example:
+ADR 0003 takes geometry from Elgato's DeviceType table (R8), which documents each type's key and dial counts; `DeviceTypes` in `internal/decks/decks.go` already carries them. Two facts are missing, and this step observes both for every physical deck on this Mac:
 
-```go
-var KnownGeometry = map[[2]int]ports.Geometry{
-	{4057, 143}: {Columns: 8, Rows: 4}, // R22: counted in the app, 2026-10-xx
-}
-```
+1. Run `tools/observe-m1.sh inventory geometry`. For each deck, note the vendor/product numbers in its (redacted) key and the deck's model name as the app shows it in its device list.
+2. Match the model name to R8's DeviceType (e.g. "Stream Deck XL" → 2). Add a row to `ProductTypes`, e.g. `{4057, 143}: 2, // R22`.
+3. In the app's deck view, read the key grid (columns × rows) for that type and add it to the type's `DeviceTypes` row, e.g. `2: {Name: "Stream Deck XL", Keys: 32, Columns: 8, Rows: 4}, // grid: R22`. `TestGeometryTablesAreConsistent` then checks it against R8's documented key count: a misread grid that does not multiply to it fails the test, so the observation is cross-checked against the documentation rather than trusted alone.
 
-and add a row to `docs/references.md`: `| R22 | Key grid per USB product | **Observed** | the app's deck view, app 7.5.1 | product <p> = <c>×<r>, … (vendor 4057). Product ids are model ids, not serials. |`. Add a test to `internal/decks/decks_test.go` asserting each added row (`KnownGeometry[[2]int{4057, <p>}] == ports.Geometry{Columns: <c>, Rows: <r>}`), and re-run `inventory`: those decks now show `destination=true`.
+Add `docs/references.md` row R22: `| R22 | USB product → DeviceType and grid split | **Observed** | the app's device list and deck view, app 7.5.1 | product <p> = DeviceType <t> (<name>), grid <c>×<r> (R8 documents <keys> keys); … Product ids are model ids, not serials. |`. Re-run `tools/observe-m1.sh inventory geometry`: those decks now show `destination=true`. Run `go test ./internal/decks/`.
 
-- [ ] **Step 3: U2, what the empty `Pages.Default` page is**
+- [ ] **Step 4: U2, what the empty `Pages.Default` page is**
 
 ```bash
-/tmp/schrodeck-m1 observe start u2-new-profile 2>&1 | tee observe_$(date +"%F-%H%M.%S").log
-# In the app: create a new, empty profile on one deck. Nothing else.
-/tmp/schrodeck-m1 observe stop u2-new-profile --out docs/observations/u2-new-profile.md 2>&1 | tee observe_$(date +"%F-%H%M.%S").log
-/tmp/schrodeck-m1 observe start u2-reorder 2>&1 | tee observe_$(date +"%F-%H%M.%S").log
-# In the app: on that new profile add a second page, then swap the order of the two pages.
-/tmp/schrodeck-m1 observe stop u2-reorder --out docs/observations/u2-reorder.md 2>&1 | tee observe_$(date +"%F-%H%M.%S").log
+tools/observe-m1.sh observe u2-new-profile "create a new, empty profile on one deck and name it schrodeck-m1-scratch"
+tools/observe-m1.sh observe u2-reorder "on schrodeck-m1-scratch add a second page, then swap the order of the two pages"
 ```
 
-Read both reports. Answer: does a new profile get a `Pages.Default` page with zero actions; does reordering change `Pages.Default` or only `Pages.Pages`?
+Read both reports. Answer: does a new profile get a `Pages.Default` page with zero actions; does reordering change `Pages.Default` or only `Pages.Pages`? (Page names in the report are pseudonyms by position before the change, so a swap reads as `[profile-N/page/1, profile-N/page/0]`.)
 
-- [ ] **Step 4: U3, smart profiles**
+- [ ] **Step 5: U3, smart profiles**
 
-`observe start u3-smart` → in the app, link the new profile to one application (Profile settings → smart profile) → `observe stop u3-smart --out docs/observations/u3-smart.md`. Answer: what `AppIdentifier` holds for a linked app (bundle id? path?), and whether `"*"` means "any application".
+`tools/observe-m1.sh observe u3-smart "link schrodeck-m1-scratch to one application (profile settings → smart profile)"`. Answer: what `AppIdentifier` holds for a linked app (bundle id? path?), and whether `"*"` means "any application".
 
-- [ ] **Step 5: U4 and U5, virtual decks**
+- [ ] **Step 6: U4, U5 and U8, virtual decks**
 
-`observe start u4-virtual-open` → open the virtual deck's window once → `observe stop u4-virtual-open --out docs/observations/u4-virtual-open.md`. Answer: does the selected profile's folder appear (lazy creation)?
+`tools/observe-m1.sh observe u4-virtual-open "open the virtual deck's window once"`. Answer: does the selected profile's folder appear (lazy creation)?
 
-`observe start u5-second-virtual` → create a second virtual deck → `observe stop u5-second-virtual --out docs/observations/u5-second-virtual.md`. Answer: from the `prefs` rows, do two virtual decks share `@(0)[]` or get distinct keys? Look also for U8: does the report show where the new virtual deck's grid size is stored? (If it is in no file this harness reads, record "not in prefs Devices or ProfilesV3".)
+`tools/observe-m1.sh observe u5-second-virtual "create a second virtual deck"`. Answer: from the `prefs` rows, do two virtual decks share `@(0)[]` or get distinct keys? U8: does the report show where the new virtual deck's grid size is stored? (If it is in no file this harness reads, record "not in prefs Devices or ProfilesV3"; virtual decks then stay "geometry not verified" and a follow-up issue records what would settle it.) Delete the second virtual deck afterwards.
 
-- [ ] **Step 6: P8 and P11, folders and profile switches**
+- [ ] **Step 7: P8 and P11, folders and profile switches**
 
-`observe start p8-folder` → on the throwaway profile, create a Folder button and put one button inside it → `observe stop p8-folder --out docs/observations/p8-folder.md`. Answer P11: how the folder button refers to its sub-page (a page UUID in its settings?), and whether the sub-page appears in `Pages.Pages`.
+`tools/observe-m1.sh observe p8-folder "on schrodeck-m1-scratch, create a Folder button and put one button inside it"`. Answer P11: how the folder button refers to its sub-page (a page UUID in its settings? the report shows it as a `profile-N/sub-page-1` pseudonym if so), and whether the sub-page appears in `Pages.Pages`.
 
-`observe start p8-switch` → add a "Switch Profile" action pointing at another profile → `observe stop p8-switch --out docs/observations/p8-switch.md`. Answer P8: is the target referenced by its folder UUID, and is a device id embedded? Confirm with `/tmp/schrodeck-m1 doctor`: its P8 line should now report the reference.
+`tools/observe-m1.sh observe p8-switch "on schrodeck-m1-scratch, add a Switch Profile action pointing at another profile"`. Answer P8: is the target referenced by its folder UUID (the report shows the target's `profile-N` pseudonym), and is a device id embedded? Confirm with `tools/observe-m1.sh doctor p8`: its P8 line should now report the reference.
 
-- [ ] **Step 7: U10 and F1, ordinary edits and the fingerprint**
+- [ ] **Step 8: U10 and F1, ordinary edits and the fingerprint**
 
-For each edit below, run `observe start f1-<edit>`, make the edit, `observe stop f1-<edit> --out docs/observations/f1-<edit>.md`, then `/tmp/schrodeck-m1 doctor 2>&1 | tee doctor-f1_$(date +"%F-%H%M.%S").log` and note whether `FP` still passes (and which key paths it names if not):
+For each edit, run the observation, then `tools/observe-m1.sh doctor f1-<edit>`, and note whether `FP` still passes (and which key paths it names if not):
 
-- `title-colour`: set a button's title colour;
-- `font-size`: change a title's font size;
-- `multi-action`: add a Multi Action with two steps (also answers U10: do the steps carry their own `ActionID`s inside `Settings`?);
-- `smart-link`: the U3 profile already exists; just run `doctor` and note `FP`.
+```bash
+tools/observe-m1.sh observe f1-title-colour "on schrodeck-m1-scratch, set one button's title colour"
+tools/observe-m1.sh doctor f1-title-colour
+tools/observe-m1.sh observe f1-font-size "on schrodeck-m1-scratch, change one title's font size"
+tools/observe-m1.sh doctor f1-font-size
+tools/observe-m1.sh observe f1-multi-action "on schrodeck-m1-scratch, add a Multi Action with two steps"
+tools/observe-m1.sh doctor f1-multi-action
+tools/observe-m1.sh doctor f1-smart-link
+```
+
+The multi-action report also answers U10: do the steps carry their own `ActionID`s inside `Settings` (they show as `uuid-N` pseudonyms)? `f1-smart-link` needs no new edit: the U3 link already exists.
 
 If `FP` fails on any ordinary edit, F1 is confirmed: stop and raise it with the owner, because ADR 0015's equality digest would pause sync on normal use. The likely fix (an ADR 0015 revision: trip only on key paths *outside* the accepted union rather than on any digest change) is a design decision, not part of this task.
 
-- [ ] **Step 8: U1, a bigger layout onto a smaller deck (optional, throwaway)**
+- [ ] **Step 9: Issue #2, editing a deck that is not attached**
 
-`observe start u1-xl-to-small` → in the app, copy an XL page that has buttons beyond column 5 and paste it into a profile of a 5×3 deck → `observe stop u1-xl-to-small --out docs/observations/u1-xl-to-small.md`. Answer: are out-of-range keys dropped, kept off-grid, or refused?
+Disconnect the deck that holds `schrodeck-m1-scratch` (unplug it, or flip the Thunderbolt switch to the other Mac), then:
 
-- [ ] **Step 9: U7, U9 and P10 from what is already on disk**
+`tools/observe-m1.sh observe issue2-offline-edit "with the deck disconnected, select it in the app if it is still listed, and change one button title on schrodeck-m1-scratch; if the app does not allow it, do nothing"`
+
+Reconnect the deck. Answer #2: did the app allow the edit, and did `ProfilesV3` change? Record the answer as a references row and comment it on issue #2 (`gh issue comment 2`), then close #2 from the PR (`Closes #2` in its body) if it is settled.
+
+- [ ] **Step 10: U1, a bigger layout onto a smaller deck (optional)**
+
+Only if a smaller deck is attached: create a second throwaway profile `schrodeck-m1-scratch` on it (outside an observation), then `tools/observe-m1.sh observe u1-xl-to-small "copy an XL page from schrodeck-m1-scratch that has buttons beyond column 5 and paste it into the smaller deck's schrodeck-m1-scratch"`. Answer: are out-of-range keys dropped, kept off-grid, or refused?
+
+- [ ] **Step 11: U7, U9, P10 and issue #1 from what is already on disk**
 
 - U7: in `docs/observations/u5-second-virtual.md` (or any report with `prefs` rows), find the `_raw` entry and record its key shape (redacted) and value type. It needs no new observation.
-- U9: in `/tmp/schrodeck-m1 inventory`, every physical deck that shows a model got it from a profile whose `Device.UUID` equals the prefs key exactly; record "equal for N of N decks on this Mac" in contract A's `DeviceEnumerator` invariants and as a references row.
+- U9: run `tools/observe-m1.sh inventory u9`. Its `UNMATCHED` lines (JSON: `unmatched`) list every profile whose `Device.UUID` equals no prefs device key and every device key no profile is bound to; count them. If there are none, record "equal for N of N decks on this Mac" in contract A's `DeviceEnumerator` invariants and as a references row; otherwise record what differs (redacted) and keep U9 open. A deck that simply has no profile yet is listed too: say so rather than counting it as a mismatch.
 - P10 (two profiles sharing `ActionID`s): the app never creates duplicates through its UI (R20: copies get new ids), and testing tolerance would require hand-editing the app's files, which M1 does not do. Record P10 as "not tested in M1; informational only (schrodeck regenerates `ActionID`s on every install, ADR 0026); the restart-tier probe in M3 records it". If the owner wants it tested by hand anyway, that is a separate, explicitly approved step on a throwaway profile with the app quit.
+- Issue #1 needs the second Mac with the same physical deck attached. If it is available: on each Mac, run `/tmp/schrodeck-m1 inventory --json --show-ids` **in the terminal only** (never through the script, never pasted anywhere: the output contains serials) and compare the key of that deck by eye; record only "identical" or "different" on issue #1 and as a references row, and close #1 from the PR. If it is not available, leave #1 open and say so in the PR body.
 
-- [ ] **Step 10: Review every report, then write the findings into the docs**
+- [ ] **Step 12: Review every report, write the findings into the docs, clean up**
 
 For each file in `docs/observations/`: read it in full, replace anything personal the redactor missed (profile names, titles), and fill in its draft evidence row. Then:
 
 - `docs/references.md`: one row per settled question (R22, R23, …), status **Observed**, source `docs/observations/<name>.md`, the finding as a claim.
 - `docs/streamdeck-config-model.md` § Unknowns: mark each U-row answered (with its R id) or still open (with what the observation showed); add rows U7–U10.
 - `docs/contracts/profile-format.md`: update P8, P10 and P11 (Basis column: observed with R id; or still unknown).
-- `docs/contracts/client-os.md`: the verified-versions row from step 1.
+- `docs/contracts/client-os.md`: the verified-versions row from step 2.
 - If U2, U3 or P11 show that the hash definition is wrong (e.g. folder sub-pages need canonical labels), do **not** change `normhash` in this PR: record the finding and open an issue for a contract C change with a `norm_version` bump.
 
-- [ ] **Step 11: Leak-scan, commit, PR**
+Finally, in the app, delete every `schrodeck-m1-scratch` profile (and the second virtual deck, if Step 6 left it).
+
+- [ ] **Step 13: Leak-scan, commit, PR**
 
 ```bash
-git add -A
+git add tools/observe-m1.sh docs internal/decks
+git status --short   # only those paths; no .log file may appear
 tools/ci/leak-scan.sh
 # plus the manual pre-push scan from the global rules; both must be clean
 git commit -m "docs(#<n>): settle format unknowns on a real Mac; geometry rows R22"
 export $(cat ~/.ssh_agent_socket) && git push -u origin HEAD
-gh pr create --fill --body "Closes #<n>"
+gh pr create --fill --body "$(printf 'Closes #%s\nCloses #2\nRefs #1 (or Closes #1 if Step 11 compared two Macs)\n\nhttps://claude.ai/code/session_01BpNb9wCfEXosfKyRoBrsr4\n' <n>)"
 ```
 
-Then CI, a code-review subagent, the owner's review (the owner reads every observation file before merge: they come from a real machine), squash merge.
+Edit the body's `#1`/`#2` lines to match what was actually settled before creating the PR. Then CI, a code-review subagent, the owner's review (the owner reads every observation file before merge: they come from a real machine), squash merge.
 
 ---
 
 ## Self-review
 
-- **Spec / milestone coverage (M1 row and ADR 0031):** model/parser keeping unknown fields (Tasks 1–2); normalizer/hasher P9, P11 (Task 4); semantic diff (Task 5); observation harness (Task 7, CLI in Task 11); probe runner (Task 8) with `doctor` built on it (Task 11); redacted fixture export (Task 6, CLI in Task 11); `status`, `doctor` read-only tier, `inventory` (Task 11); enumerate decks and profiles, normalize, hash, app version and schema check (Tasks 3, 10, 11); ADR 0010 `host_id` (Task 9); ADR 0026 identity mapping (Task 9); ADR 0003 geometry (Tasks 10, 12); ADR 0019 selected profile read only in probe M2 (Task 11); ADR 0017 logging (inherited from M0); settle U1–U6, P8, P10, P11 and update contract C before any write path (Task 12). ADR 0031's "Verified by": the import check (M0 CI, re-run in Task 8), round trip with an injected unknown field and a known-bad naive decoder (Tasks 1–2), hash pairs with known-bad variants (Task 4), `observe` against fixture before/after with redaction (Tasks 7, 11). Issue #3's normalization fixtures: Task 2's `fixture` package and Task 4's pairs. Not in M1 by design: P4, P10's restart-tier record, contract B M3/M4 (all M3), variables and `{{DEVICE}}` substitution (M2/M3, ADR 0006).
-- **Placeholders:** the issue numbers (`<n>`) and the Task 12 values that only an observation can produce (fingerprint, product ids, R-row text) are the only fill-ins, and each comes with the exact procedure that yields it. Every code step is complete code that was compiled and tested in a scratch tree on 2026-10-02 (go1.27.1, darwin/arm64); the Linux and Windows paths were cross-built there but not run.
-- **Type consistency:** `probe.Result` replaces M0's `cli.CheckResult` in `doctor`'s output (an additive change for contract E, documented in Task 11 step 10); `host.Host` is introduced in Task 10 and used by `connector`, `doctor` and `cli`; `decks.RecordKey`/`RecordRaw` are shared by `macos.DeviceRecords`, `decks.Enumerate` and `doctor.m2`.
+- **Spec / milestone coverage (M1 row and ADR 0031):** model/parser keeping unknown fields (Tasks 1–2); normalizer/hasher P9, P11 (Task 4); semantic diff (Task 5); observation harness (Task 7, CLI in Task 11); probe runner (Task 8) with `doctor` built on it (Task 11); redacted fixture export (Task 6, CLI in Task 11); `status`, `doctor` read-only tier, `inventory` (Task 11); enumerate decks and profiles, normalize, hash, app version and schema check (Tasks 3, 10, 11); ADR 0010 `host_id` (Task 9); ADR 0026 identity mapping (Task 9); ADR 0003 geometry from R8 plus observed product mapping and grid split (Tasks 10, 12); ADR 0019 selected profile read only in probe M2 (Task 11); settle U1–U6, P8, P10, P11 and issues #1 (when the second Mac is available) and #2, and update contract C before any write path (Task 12). ADR 0017 logging: M1 logs to stderr through M0's `logging` package; the persistent log file under `Paths.LogDir()` is deferred to M4, the first milestone with unattended runs, and every M1 command run on a real machine is teed to a log outside the repository instead (Task 12's runner). ADR 0031's "Verified by": the import check (M0 CI, re-run in Task 8), round trip with an injected unknown field and a known-bad naive decoder (Tasks 1–2), hash pairs with known-bad variants (Task 4), `observe` against fixture before/after with redaction and pseudonyms (Tasks 7, 11). Issue #3's normalization fixtures (moved to their own issue by M0 Task 9): Task 2's `fixture` package and Task 4's pairs. Not in M1 by design: P4, P10's restart-tier record, contract B M3/M4 (all M3), variables and `{{DEVICE}}` substitution (M2/M3, ADR 0006).
+- **Write boundary:** `deckformat` reads the app's files only through `fs.FS`; `observe`, `redact` and `pathguard` use `os` to write snapshots (schrodeck's state dir) and exports (a path the user names), which ADR 0031 allows, and every user-named target passes `pathguard.RefuseInside`.
+- **Placeholders:** the issue numbers (`<n>`) and the Task 12 values that only an observation can produce (fingerprint, product ids, grid splits, R-row text) are the only fill-ins, and each comes with the exact procedure that yields it. Every code step is complete code that was compiled and tested in a scratch tree on 2026-10-02 (go1.27.1, darwin/arm64), with `SCHRODECK_LIVE` unset; the Linux and Windows paths were cross-built there but not run.
+- **Type consistency:** `probe.Result` replaces M0's `cli.CheckResult` in `doctor`'s output (an additive change for contract E, documented in Task 11 step 10); `host.Host` is introduced in Task 10 and used by `connector`, `doctor` and `cli`; `decks.RecordKey`/`RecordRaw` are shared by `macos.DeviceRecords`, `decks.Enumerate`, `decks.Unmatched` and `doctor.m2`; `decks.KnownGeometry()` is a function derived from `DeviceTypes` and `ProductTypes`, called by the macOS connector; `pathguard` (Task 6) is used by `redact.ExportFixture` and the CLI (Task 11).
 - **Review Focus:** each line names its pinning test and owning task; F1 is the one hazard a unit test can only document, so its measurement is a Task 12 step with a stop condition.
