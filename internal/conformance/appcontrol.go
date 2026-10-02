@@ -23,6 +23,9 @@ type AppHarness struct {
 	// SettleQuiet is also the window after Quit during which no write may appear; a real connector sets it to the settle window contract C P4 measured for its app version.
 	SettleQuiet time.Duration
 	SettleMax   time.Duration
+
+	// writeStall, when set, runs inside AppControlLaunchSettle's writer between taking a write's timestamp and landing the write. Only this package's tests set it, to simulate a starved runner.
+	writeStall func(write int)
 }
 
 // dirStaysQuiet reports whether dir's contents are unchanged across window. It is the one home of "has this directory been written to".
@@ -100,7 +103,7 @@ func AppControlQuitTimeout(tb TB, stuck ports.AppControl, timeout time.Duration)
 	}
 }
 
-// AppControlLaunchSettle checks contract A's "launch + settle": WaitSettled returns only once the app is running AND ProfilesDir has been quiet for the requested window. The suite writes ProfilesDir (a first write before WaitSettled is called, then every quarter window for three windows) and requires that when WaitSettled returns, the most recent write is at least one quiet window old. The write timestamp is taken before each write so the check can only be lenient, never fail a correct implementation on a slow runner: if the writer stalls for longer than the window, returning early is correct and the check agrees.
+// AppControlLaunchSettle checks contract A's "launch + settle": WaitSettled returns only once the app is running AND ProfilesDir has been quiet for the requested window. The suite writes ProfilesDir (a first write before WaitSettled is called, then every quarter window for three windows) and requires that when WaitSettled returns, the most recent write is at least one quiet window old. Each write is stamped with the time it started but only recorded once it has landed, so the check can only be lenient, never fail a correct implementation on a slow runner: a write that has not landed yet is not "the most recent", and if the writer stalls for longer than the window, returning early is correct and the check agrees.
 func AppControlLaunchSettle(tb TB, h AppHarness) {
 	tb.Helper()
 	if err := h.App.Launch(); err != nil {
@@ -110,11 +113,16 @@ func AppControlLaunchSettle(tb TB, h AppHarness) {
 	var mu sync.Mutex
 	var lastWrite time.Time
 	write := func(i int) {
-		mu.Lock()
-		lastWrite = time.Now()
-		mu.Unlock()
+		started := time.Now()
+		if h.writeStall != nil {
+			h.writeStall(i)
+		}
 		// The content differs on every write: settling is judged by content, not mtime.
 		_ = os.WriteFile(filepath.Join(h.ProfilesDir, "busy.json"), []byte(fmt.Sprintf("write %d", i)), 0o644)
+		// Only a write that has landed counts as "the most recent", and it is stamped with the time it started, so any timing error makes the check more lenient, never stricter.
+		mu.Lock()
+		lastWrite = started
+		mu.Unlock()
 	}
 	write(0)
 	done := make(chan struct{})

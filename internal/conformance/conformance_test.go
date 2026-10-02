@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,14 +27,21 @@ func (r *recorder) Errorf(format string, args ...any) {
 	r.failures = append(r.failures, fmt.Sprintf(format, args...))
 }
 
-// requireFailed is the RED half of every known-bad test: the suite must have recorded at least one failure, and the failures are logged so the run shows WHY it failed.
-func requireFailed(t *testing.T, rec *recorder, what string) {
+// requireFailed is the RED half of every known-bad test: the suite must have recorded a failure whose message contains wantSubstring, so a known-bad cannot pass by tripping some unrelated check. The failures are logged so the run shows WHY it failed.
+func requireFailed(t *testing.T, rec *recorder, what, wantSubstring string) {
 	t.Helper()
 	if len(rec.failures) == 0 {
 		t.Fatalf("suite passed %s", what)
 	}
+	matched := false
 	for _, f := range rec.failures {
 		t.Logf("suite correctly failed: %s", f)
+		if strings.Contains(f, wantSubstring) {
+			matched = true
+		}
+	}
+	if !matched {
+		t.Fatalf("suite failed %s, but not for the intended reason: want a failure containing %q", what, wantSubstring)
 	}
 }
 
@@ -50,15 +58,20 @@ func TestAppControlQuitOnFake(t *testing.T) {
 	AppControlQuit(t, harness(t, fake.NewApp(dir), dir))
 }
 
-// writesAfterQuit violates contract A: Quit returns nil but the process keeps writing ProfilesDir.
-type writesAfterQuit struct{ *fake.App }
+// writesAfterQuit violates contract A: Quit returns nil but the process keeps writing ProfilesDir. lateBy is how long after Quit returns the write lands; done is closed once it has.
+type writesAfterQuit struct {
+	*fake.App
+	lateBy time.Duration
+	done   chan struct{}
+}
 
 func (w writesAfterQuit) Quit(timeout time.Duration) error {
 	if err := w.App.Quit(timeout); err != nil {
 		return err
 	}
 	go func() {
-		time.Sleep(20 * time.Millisecond) // well inside the suite's post-quit window
+		defer close(w.done)
+		time.Sleep(w.lateBy)
 		_ = os.WriteFile(filepath.Join(w.App.ProfilesDir, "late.json"), []byte("{}"), 0o644)
 	}()
 	return nil
@@ -66,9 +79,17 @@ func (w writesAfterQuit) Quit(timeout time.Duration) error {
 
 func TestAppControlQuitCatchesWriteAfterQuit(t *testing.T) {
 	dir := t.TempDir()
+	h := harness(t, nil, dir)
+	done := make(chan struct{})
+	h.App = writesAfterQuit{App: fake.NewApp(dir), lateBy: h.SettleQuiet / 2, done: done} // half the suite's post-quit window
 	rec := &recorder{}
-	AppControlQuit(rec, harness(t, writesAfterQuit{fake.NewApp(dir)}, dir))
-	requireFailed(t, rec, "an app that writes ProfilesDir after Quit returned nil")
+	AppControlQuit(rec, h)
+	requireFailed(t, rec, "an app that writes ProfilesDir after Quit returned nil", "ProfilesDir changed after Quit")
+	select {
+	case <-done:
+	case <-time.After(h.SettleMax):
+		t.Fatal("the late writer goroutine did not finish")
+	}
 }
 
 // stillRunningAfterQuit violates contract A differently: Quit returns nil but Running still reports true.
@@ -80,7 +101,7 @@ func TestAppControlQuitCatchesStillRunning(t *testing.T) {
 	dir := t.TempDir()
 	rec := &recorder{}
 	AppControlQuit(rec, harness(t, stillRunningAfterQuit{fake.NewApp(dir)}, dir))
-	requireFailed(t, rec, "an app that is still running after Quit returned nil")
+	requireFailed(t, rec, "an app that is still running after Quit returned nil", "Running() = true after Quit")
 }
 
 func TestAppControlQuitTimeoutOnFake(t *testing.T) {
@@ -102,7 +123,7 @@ func TestAppControlQuitTimeoutCatchesFalseSuccess(t *testing.T) {
 	app.IgnoreQuit = true
 	rec := &recorder{}
 	AppControlQuitTimeout(rec, liesAboutQuit{app}, 50*time.Millisecond)
-	requireFailed(t, rec, "an app whose Quit returns nil while it is still running")
+	requireFailed(t, rec, "an app whose Quit returns nil while it is still running", "Quit returned nil for an app that did not exit")
 }
 
 // givesUpEarly violates the timeout half of Quit: it errors well before the timeout it was given.
@@ -115,7 +136,22 @@ func TestAppControlQuitTimeoutCatchesEarlyGiveUp(t *testing.T) {
 	app.IgnoreQuit = true
 	rec := &recorder{}
 	AppControlQuitTimeout(rec, givesUpEarly{app}, 300*time.Millisecond)
-	requireFailed(t, rec, "an app whose Quit gives up before its timeout")
+	requireFailed(t, rec, "an app whose Quit gives up before its timeout", "before its")
+}
+
+// stopsAnywayButErrors violates the other half of Quit's guarantee: it waits out the timeout and reports failure, yet the app did stop. A caller told "still running" would then wait on, or wrongly avoid, a stopped app.
+type stopsAnywayButErrors struct{ *fake.App }
+
+func (s stopsAnywayButErrors) Quit(timeout time.Duration) error {
+	time.Sleep(timeout)
+	_ = s.App.Quit(timeout)
+	return fake.ErrQuitTimeout
+}
+
+func TestAppControlQuitTimeoutCatchesStoppedDespiteError(t *testing.T) {
+	rec := &recorder{}
+	AppControlQuitTimeout(rec, stopsAnywayButErrors{fake.NewApp(t.TempDir())}, 50*time.Millisecond)
+	requireFailed(t, rec, "an app that stopped although Quit returned an error", "app reported not running after Quit failed")
 }
 
 func TestAppControlLaunchSettleOnFake(t *testing.T) {
@@ -132,7 +168,19 @@ func TestAppControlLaunchSettleCatchesNoWait(t *testing.T) {
 	dir := t.TempDir()
 	rec := &recorder{}
 	AppControlLaunchSettle(rec, harness(t, settlesImmediately{fake.NewApp(dir)}, dir))
-	requireFailed(t, rec, "an app whose WaitSettled ignores ongoing writes")
+	requireFailed(t, rec, "an app whose WaitSettled ignores ongoing writes", "most recent ProfilesDir write was only")
+}
+
+// A correct implementation must pass even when the suite's own writer stalls between starting a write and landing it (a starved runner): the write has not happened yet, so it cannot count as the most recent one. The stall is injected through the suite's writeStall hook.
+func TestAppControlLaunchSettleToleratesWriterStall(t *testing.T) {
+	dir := t.TempDir()
+	h := harness(t, fake.NewApp(dir), dir)
+	h.writeStall = func(i int) {
+		if i == 2 {
+			time.Sleep(2 * h.SettleQuiet)
+		}
+	}
+	AppControlLaunchSettle(t, h)
 }
 
 // --- Watcher ---------------------------------------------------------------
@@ -199,7 +247,7 @@ func (topLevelOnly) Watch(ctx context.Context, paths []string, debounce time.Dur
 func TestWatcherRecursiveCatchesTopLevelOnly(t *testing.T) {
 	rec := &recorder{}
 	WatcherRecursive(rec, topLevelOnly{}, t.TempDir(), debounce)
-	requireFailed(t, rec, "a watcher that only sees the top level")
+	requireFailed(t, rec, "a watcher that only sees the top level", "no event for a write three levels deep")
 }
 
 // perWrite violates contract A: no debounce, one event per changed file.
@@ -240,7 +288,25 @@ func (perWrite) Watch(ctx context.Context, paths []string, debounce time.Duratio
 func TestWatcherBurstCatchesPerWriteEvents(t *testing.T) {
 	rec := &recorder{}
 	WatcherBurstIsOneEvent(rec, perWrite{}, t.TempDir(), debounce)
-	requireFailed(t, rec, "a watcher that sends one event per write")
+	requireFailed(t, rec, "a watcher that sends one event per write", "second event")
+}
+
+// silentWatcher violates contract A: it is accepted but never delivers an event.
+type silentWatcher struct{}
+
+func (silentWatcher) Watch(ctx context.Context, paths []string, debounce time.Duration) (<-chan ports.Event, error) {
+	ch := make(chan ports.Event)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
+}
+
+func TestWatcherBurstCatchesSilentWatcher(t *testing.T) {
+	rec := &recorder{}
+	WatcherBurstIsOneEvent(rec, silentWatcher{}, t.TempDir(), debounce)
+	requireFailed(t, rec, "a watcher that never emits", "no event for a burst")
 }
 
 // --- HostIdentity ----------------------------------------------------------
@@ -268,18 +334,31 @@ func TestHostIdentityCatchesUnstableID(t *testing.T) {
 	rec := &recorder{}
 	n := 0
 	HostIdentityStable(rec, flappingIdentity{&sync.Mutex{}, &n})
-	requireFailed(t, rec, "a hardware id that changes between calls")
+	requireFailed(t, rec, "a hardware id that changes between calls", "HardwareID changed")
 }
 
-// emptyIdentity violates contract A: no hardware id and no user.
-type emptyIdentity struct{}
+// emptyHardwareID violates contract A: no hardware id (the user name is fine, so only the hardware-id check can catch it).
+type emptyHardwareID struct{}
 
-func (emptyIdentity) HardwareID() (string, error) { return "", nil }
-func (emptyIdentity) UserName() string            { return "" }
-func (emptyIdentity) FriendlyName() string        { return "" }
+func (emptyHardwareID) HardwareID() (string, error) { return "", nil }
+func (emptyHardwareID) UserName() string            { return "alice" }
+func (emptyHardwareID) FriendlyName() string        { return "test mac" }
 
-func TestHostIdentityCatchesEmptyID(t *testing.T) {
+func TestHostIdentityCatchesEmptyHardwareID(t *testing.T) {
 	rec := &recorder{}
-	HostIdentityStable(rec, emptyIdentity{})
-	requireFailed(t, rec, "an identity with an empty hardware id and user name")
+	HostIdentityStable(rec, emptyHardwareID{})
+	requireFailed(t, rec, "an identity with an empty hardware id", "HardwareID is empty")
+}
+
+// emptyUserName violates contract A: no user name (the hardware id is fine, so only the user-name check can catch it).
+type emptyUserName struct{}
+
+func (emptyUserName) HardwareID() (string, error) { return "HW-TEST-0001", nil }
+func (emptyUserName) UserName() string            { return "" }
+func (emptyUserName) FriendlyName() string        { return "test mac" }
+
+func TestHostIdentityCatchesEmptyUserName(t *testing.T) {
+	rec := &recorder{}
+	HostIdentityStable(rec, emptyUserName{})
+	requireFailed(t, rec, "an identity with an empty user name", "UserName is empty")
 }
