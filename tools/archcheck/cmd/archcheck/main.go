@@ -40,12 +40,18 @@ func main() {
 		module, err := archcheck.ModulePath(*dir)
 		fail(err)
 		violations = checkPerGOOS(*dir, []string{"./..."}, func(pkgs []archcheck.Package) []string {
+			if !anyInModule(pkgs, module) {
+				fail(fmt.Errorf("no package of module %s was listed in %s, so nothing was checked", module, *dir))
+			}
 			return archcheck.CoreViolations(pkgs, module)
 		})
 	case "boundary":
 		forbidden, err := archcheck.ModulePath(*forbid)
 		fail(err)
 		violations = checkPerGOOS(*dir, []string{"-deps", "-test", "./..."}, func(pkgs []archcheck.Package) []string {
+			if len(pkgs) == 0 {
+				fail(fmt.Errorf("no package was listed in %s, so nothing was checked", *dir))
+			}
 			return archcheck.BoundaryViolations(pkgs, forbidden)
 		})
 	default:
@@ -72,6 +78,15 @@ func checkPerGOOS(dir string, listArgs []string, check func([]archcheck.Package)
 		}
 	}
 	return violations
+}
+
+func anyInModule(pkgs []archcheck.Package, module string) bool {
+	for _, p := range pkgs {
+		if p.Module != nil && p.Module.Path == module {
+			return true
+		}
+	}
+	return false
 }
 
 func fail(err error) {

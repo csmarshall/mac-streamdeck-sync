@@ -3,10 +3,10 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Package archcheck enforces two import rules:
-//   - the core (every package of the root module except cmd/, tools/ and
-//     internal/connector/) imports nothing OS-specific and no connector,
-//     command or tool package (ADR 0018);
+//   - the core (every package of the root module except cmd/, tools/ and internal/connector/) imports nothing OS-specific and no connector, command or tool package (ADR 0018);
 //   - deckformat depends on no package of the schrodeck module (ADR 0031).
+//
+// Known limit: only GOOS varies between listings (not GOARCH or build tags), and cgo files are only seen where CGO_ENABLED=1.
 package archcheck
 
 import (
@@ -103,7 +103,7 @@ func dedupe(s []string) []string {
 	return out
 }
 
-// ModulePath reads the module path from dir/go.mod.
+// ModulePath reads the module path from dir/go.mod, ignoring a trailing comment.
 func ModulePath(dir string) (string, error) {
 	b, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
@@ -113,6 +113,7 @@ func ModulePath(dir string) (string, error) {
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			rest, _, _ = strings.Cut(rest, "//")
 			return strings.Trim(strings.TrimSpace(rest), `"`), nil
 		}
 	}
