@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseLevel(t *testing.T) {
@@ -65,6 +66,10 @@ func TestNewFiltersBelowLevelAndKeepsContext(t *testing.T) {
 }
 
 func TestTimestampIsUTCRFC3339(t *testing.T) {
+	// Pin a non-UTC local zone so the test cannot pass merely because the host (a CI runner) is already on UTC.
+	saved := time.Local
+	time.Local = time.FixedZone("test-zone", -5*3600)
+	t.Cleanup(func() { time.Local = saved })
 	var buf bytes.Buffer
 	log, err := New(&buf, "info")
 	if err != nil {
@@ -73,5 +78,17 @@ func TestTimestampIsUTCRFC3339(t *testing.T) {
 	log.Info("x")
 	if !regexp.MustCompile(`^time=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z `).MatchString(buf.String()) {
 		t.Fatalf("timestamp is not UTC RFC 3339: %q", buf.String())
+	}
+}
+
+func TestDebugLevelEmitsDebugRecords(t *testing.T) {
+	var buf bytes.Buffer
+	log, err := New(&buf, "debug")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Debug("detail", "component", "test")
+	if !strings.Contains(buf.String(), "level=DEBUG") || !strings.Contains(buf.String(), "msg=detail") {
+		t.Errorf("debug record not emitted at debug level: %q", buf.String())
 	}
 }
