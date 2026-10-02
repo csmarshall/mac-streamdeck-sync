@@ -172,11 +172,40 @@ expect_output() {
 }
 expect_output "leak-scan says plainly it ran generic-only without the secret" 'personal identifiers were NOT checked' want-present in_dir "$clean" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
 expect_output "leak-scan stays silent about skipped patterns when the secret is set" 'personal identifiers were NOT checked' want-absent in_dir "$clean" env LEAK_SCAN_EXTRA=zebra-marker "$here/leak-scan.sh"
+expect_output "leak-scan with the secret set reports the personal-pattern verdict" '(generic and personal patterns' want-present in_dir "$clean" env LEAK_SCAN_EXTRA=zebra-marker "$here/leak-scan.sh"
+# A malformed extra pattern makes git grep fail and echo the pattern; the secret must be masked. The want-present on the failure message keeps the want-absent from passing vacuously.
+bad_extra='secretword('
+expect 2 "leak-scan fails (2) on a malformed LEAK_SCAN_EXTRA" in_dir "$clean" env LEAK_SCAN_EXTRA="$bad_extra" "$here/leak-scan.sh"
+expect_output "leak-scan reports the git grep failure for a malformed LEAK_SCAN_EXTRA" 'git grep failed' want-present in_dir "$clean" env LEAK_SCAN_EXTRA="$bad_extra" "$here/leak-scan.sh"
+expect_output "leak-scan never echoes the LEAK_SCAN_EXTRA value when git grep fails" "$bad_extra" want-absent in_dir "$clean" env LEAK_SCAN_EXTRA="$bad_extra" "$here/leak-scan.sh"
+expect_output "leak-scan names the masked placeholder in the git grep error" '<LEAK_SCAN_EXTRA>' want-present in_dir "$clean" env LEAK_SCAN_EXTRA="$bad_extra" "$here/leak-scan.sh"
 expect_output "leak-scan reports generic-only in its verdict line" '(generic patterns' want-present in_dir "$clean" env LEAK_SCAN_EXTRA= "$here/leak-scan.sh"
 
 # --- set-leak-scan-secret.sh (usage path only; the gh call needs credentials) --
 expect 2 "set-leak-scan-secret prints usage and exits 2 without an argument" "$here/set-leak-scan-secret.sh"
 expect 2 "set-leak-scan-secret exits 2 for a missing file" "$here/set-leak-scan-secret.sh" "$scratch/no-such-file"
+# Validation happens before gh is invoked, so these need no credentials; the refusal cases run with no stub gh first on PATH, so a regression (validation skipped) fails with a different exit code instead of passing.
+: >"$scratch/secret-empty"
+printf '\n\n' >"$scratch/secret-blank-lines"
+printf 'alpha|beta\ngamma\n' >"$scratch/secret-two-lines"
+printf 'alpha|beta\n' >"$scratch/secret-one-line"
+mkdir "$scratch/nogh-bin"
+expect 2 "set-leak-scan-secret refuses an empty file" env PATH="$scratch/nogh-bin:/usr/bin:/bin" "$here/set-leak-scan-secret.sh" "$scratch/secret-empty"
+expect 2 "set-leak-scan-secret refuses a file of only newlines" env PATH="$scratch/nogh-bin:/usr/bin:/bin" "$here/set-leak-scan-secret.sh" "$scratch/secret-blank-lines"
+expect 2 "set-leak-scan-secret refuses a value with an embedded newline" env PATH="$scratch/nogh-bin:/usr/bin:/bin" "$here/set-leak-scan-secret.sh" "$scratch/secret-two-lines"
+# Known-good: a fake gh on PATH records what it was sent, proving the trailing newline is stripped and the value reaches gh intact.
+cat >"$scratch/nogh-bin/gh" <<'GH'
+#!/usr/bin/env bash
+cat >"$FAKE_GH_STDIN"
+GH
+chmod +x "$scratch/nogh-bin/gh"
+expect 0 "set-leak-scan-secret sends a one-line file to gh" env FAKE_GH_STDIN="$scratch/gh-stdin" PATH="$scratch/nogh-bin:/usr/bin:/bin" "$here/set-leak-scan-secret.sh" "$scratch/secret-one-line"
+if [[ "$(od -An -c "$scratch/gh-stdin" | tr -d ' ')" == 'alpha|beta' ]]; then
+  echo "ok    set-leak-scan-secret strips the trailing newline before sending"
+else
+  echo "FAIL  set-leak-scan-secret sent unexpected bytes: $(od -An -c "$scratch/gh-stdin")"
+  failures=$((failures + 1))
+fi
 
 if [[ $failures -gt 0 ]]; then
   echo "selftest: $failures detector verdict(s) wrong" >&2

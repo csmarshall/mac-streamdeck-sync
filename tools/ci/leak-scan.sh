@@ -29,8 +29,11 @@ if [[ $((tracked + 0)) -eq 0 ]]; then
   exit 2
 fi
 
+# git grep's stderr can echo the combined pattern (a malformed LEAK_SCAN_EXTRA does), so it is captured and only ever printed with the secret masked.
 rc=0
-hits=$(git grep -nIiP -e "$pattern" -- . ':(exclude)LICENSE') || rc=$?
+errfile=$(mktemp)
+trap 'rm -f "$errfile"' EXIT
+hits=$(git grep -nIiP -e "$pattern" -- . ':(exclude)LICENSE' 2>"$errfile") || rc=$?
 case $rc in
   0)
     printf '%s\n' "$hits" >&2
@@ -42,6 +45,11 @@ case $rc in
     ;;
   *)
     echo "leak-scan: git grep failed (exit $rc)" >&2
+    err=$(cat "$errfile")
+    if [[ -n ${LEAK_SCAN_EXTRA:-} ]]; then
+      err=${err//"$LEAK_SCAN_EXTRA"/<LEAK_SCAN_EXTRA>}
+    fi
+    printf '%s\n' "$err" >&2
     exit 2
     ;;
 esac
