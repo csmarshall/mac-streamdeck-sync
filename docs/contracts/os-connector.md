@@ -147,7 +147,7 @@ Deduplication is **not** the connector's job. The core sends at most one notific
 ### 9. `StoreSync`: is the shared folder current?
 
 ```go
-type Freshness int // Fresh | InFlight | Conflict | Unknown
+type Freshness int // Unknown (zero value, fails closed) | Fresh | InFlight | Conflict
 type StoreSync interface {
     ReadFreshness(paths []string) (Freshness, error)  // before reading the store
     PushConfirmed(paths []string) (bool, error)       // after writing: uploaded?

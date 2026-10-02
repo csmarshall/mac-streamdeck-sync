@@ -152,8 +152,7 @@ func TestTextOutput(t *testing.T) {
 	}
 }
 
-// Contract E's documented schema_version must equal the code's. The doc is
-// prose, so it can't derive the value; this test is the next best thing.
+// Contract E's documented schema_version must equal the code's. The doc is prose, so it can't derive the value; this test is the next best thing.
 func TestSchemaVersionDocumented(t *testing.T) {
 	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "contracts", "cli-json.md"))
 	if err != nil {

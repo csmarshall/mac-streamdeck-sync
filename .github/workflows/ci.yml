@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   STATICCHECK_VERSION: v0.8.1
@@ -29,6 +29,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: Detector self-tests (each detector seen to fail on known-bad input)
         run: tools/ci/selftest.sh
       - name: MPL-2.0 headers
@@ -80,6 +81,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: Tests (macOS)
         run: |
           go test -race ./...

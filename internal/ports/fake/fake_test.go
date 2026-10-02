@@ -88,7 +88,16 @@ func TestWatcherSeesDeepWrite(t *testing.T) {
 		t.Fatal("no event for a write three levels deep")
 	}
 	cancel()
-	for range ch {
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for range ch {
+		}
+	}()
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher channel was not closed after cancel")
 	}
 }
 
