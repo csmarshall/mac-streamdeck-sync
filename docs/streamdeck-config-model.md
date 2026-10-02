@@ -82,7 +82,7 @@ Consequence for schrodeck: "the same setup" has to mean **the same content**, no
 |---|---|---|
 | One deck per computer, same type everywhere (the core case) | each computer: 1 XL device → its profiles | the "same setup at every computer" goal |
 | Several decks of different types on one computer (e.g. XL + Mini + Stream Deck, as on the observed Mac) | one device node per deck, each with its own profiles | each type is independent |
-| **Two decks of the same type on one computer** (two XLs) | two device nodes with the same geometry, each with its **own** profiles | needs an explicit mapping: which setup goes to which deck (ADR [0026](adr/0026-profile-identity.md)) |
+| **Two decks of the same type on one computer** (two XLs) | two device nodes with the same geometry, each with its **own** profiles | needs an explicit mapping: which setup goes to which deck (ADR [0026](adr/0026-profile-identity.md)). The same setup may go on both; the two copies are peers (issue #5) |
 | A deck that is not connected right now | its device node and profiles remain and stay editable | documented [R11] |
 | A virtual deck | device key `@(0)[]` (no serial); may have zero profiles on disk while prefs name a selected one | observed; uniqueness of `@(0)[]` with several virtual decks is **unknown** (U5) |
 | A computer with no Stream Deck app installed | nothing to read | `join` refuses (ADR [0022](adr/0022-onboarding-init-and-join.md)) |
@@ -126,7 +126,7 @@ Mapped onto the app's model:
 
 | App concept | In a setup |
 |---|---|
-| Device | the user picks the destination device on each computer; two same-size decks are just two possible destinations |
+| Device | the user picks the destination device on each computer; two same-size decks are just two possible destinations, and one setup can be on both |
 | Profile | each member copy is an ordinary profile the app owns, created by schrodeck, in a folder named from (setup, device) |
 | Selected profile | untouched; each computer shows whatever profile it shows ([0019](adr/0019-selected-profile-stays-per-host.md)) |
 | Pages, folders, buttons | travel inside the member copy |

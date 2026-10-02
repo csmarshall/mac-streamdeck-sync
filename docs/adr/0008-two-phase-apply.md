@@ -1,6 +1,6 @@
 # 0008. Applying an update is plan → commit → verify, with a post-quit re-check
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing. Revised 2026-10-01 (review F50, F51): installs regenerate `ActionID`s, and a rejoin archives the old copy inside the same apply.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F2, F5, F6, F11, F12, F18): Revised 2026-10-01 (fail closed, [0030](0030-fail-closed-detach.md)): an unreadable or inconsistent journal detaches its targets instead of guessing. Revised 2026-10-01 (review F50, F51): installs regenerate `ActionID`s, and a rejoin archives the old copy inside the same apply. Revised 2026-10-02 (issue #5, owner's decision): the verify step moves that copy's own head; heads are per member copy.
 - a post-quit re-check;
 - the incoming fingerprint is validated;
 - a verify failure ends in BLOCKED, not a retry loop;
@@ -49,7 +49,7 @@ Two copies of one profile on one host (on two decks) are applied in the same bat
    - A plain apply has two renames per target: the old folder **aside**, then the staged folder **in**. The aside location is **outside `ProfilesV3`** (in schrodeck's state directory, on the same volume, so the rename stays atomic), so the app can never load an aside folder as an extra profile.
    - A rejoin replaces the aside rename with the **archive** rename (the old copy moves to its archive folder inside `ProfilesV3`, where it stays as an ordinary profile). The archive's `Name` change is staged beforehand (ADR [0026](0026-profile-identity.md)), so the swap itself is renames only.
 7. **Relaunch** if `app_was_running` (or if the user's setting says to always run it), then wait for it to settle (process up, files quiet). If the relaunch fails, retry once, then notify persistently. The files are already in place, and the app will load them when next opened.
-8. **Verify:** re-hash every target. If L == hash(R), move this host's head to R ([contract D](../contracts/store-format.md)); **only after that write succeeds**, set B := (R, L) (review F34). Clear the journal. If the head write fails, B is left unchanged and the next run re-evaluates: the copy is now InSync by hash and the head is retried.
+8. **Verify:** re-hash every target. If L == hash(R), move that copy's head to R ([contract D](../contracts/store-format.md)); **only after that write succeeds**, set B := (R, L) (review F34). Clear the journal. If the head write fails, B is left unchanged and the next run re-evaluates: the copy is now InSync by hash and the head is retried.
 9. **On verify failure,** log the expected and actual hashes and the differing key paths, then follow `apply.on_verify_failure`:
    - **`rollback` (default):**
      1. Snapshot the failed post-apply tree first, for diagnosis.

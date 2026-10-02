@@ -1,6 +1,6 @@
 # 0029. Problem statement and setup model: the same setup on a deck at every computer
 
-Status: Accepted 2026-10-01 (reframe: template-seeded setups; owner's decisions). Revised 2026-10-01 (review F52, F53; owner's decision): a setup is created by **publishing first, then installing** on the first Mac through the ordinary install path. No special seed path exists.
+Status: Accepted 2026-10-01 (reframe: template-seeded setups; owner's decisions). Revised 2026-10-01 (review F52, F53; owner's decision): a setup is created by **publishing first, then installing** on the first Mac through the ordinary install path. No special seed path exists. Revised 2026-10-02 (issue #5, owner's decision): one Mac may hold several member copies of a setup, one per compatible deck, and each is a full peer with its own head.
 
 ## Context
 
@@ -39,7 +39,7 @@ Each host may have one **member copy** of a setup per chosen device. Member copi
 
 **Consequences of the model, stated once:**
 
-- **Two decks of the same size on one Mac** need no special rule: the user picks the destination device explicitly, per setup.
+- **Two decks of the same size on one Mac** need no special rule: the user picks the destination device explicitly, per setup, and may put the **same** setup on both (`subscribe --deck`, [0022](0022-onboarding-init-and-join.md)). Each copy is a full peer with its own head in the store, so an edit on either deck syncs to the other and to every other Mac (owner's decision, issue #5).
 - A deck can be the destination of several setups (e.g. `schrodeck - 8x4 - Work` and `schrodeck - 8x4 - Home`). Each is a separate profile on that deck.
 - The **selected profile** on each deck stays per Mac ([0019](0019-selected-profile-stays-per-host.md)).
 - **Profiles that aren't member copies are never read for sync, written, or deleted.** That includes every template.
@@ -69,6 +69,7 @@ No check yet; to be written in the plan:
 - A crash injected between the root push and the install ⇒ the setup exists in the store, this Mac has no member yet and no partial profile, and `subscribe` (or the re-run) installs it through the normal path.
 - `join`/`subscribe`: the setup list contains only setups whose geometry matches a local device (known-bad: a fixture setup of another geometry must not be listed). Exactly one new profile is created on the chosen destination, and no existing profile is opened for writing.
 - Peers: an edit on the joining Mac's member copy reaches the first Mac's member copy (and never the template).
+- Same-Mac peers: a setup on two decks of one Mac; an edit on deck 2's copy reaches deck 1's copy and the other Macs, and concurrent edits on both fork rather than one being lost ([0005](0005-direction-detection-three-way-hash.md)).
 
 ## References
 

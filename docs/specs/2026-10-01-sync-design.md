@@ -1,12 +1,12 @@
 # schrodeck — design
 
-Status: DRAFT for review, aligned with ADRs 0001–0030 after the 2026-10-01 independent review and the template-seeded setup reframe (2026-10-01). No code exists yet.
+Status: DRAFT for review, aligned with ADRs 0001–0031 after the 2026-10-01 independent review, the template-seeded setup reframe (2026-10-01), and per-copy heads (issue #5, 2026-10-02). No code exists yet.
 
 This document is the narrative of how schrodeck fits together. The *why* behind each choice, and the alternatives rejected, live in the [ADRs](../adr/README.md). Exact formats live in the [contracts](../contracts/README.md), not here. Each section links the ADRs and contracts it relies on. Facts about the Stream Deck app are cited from [references.md](../references.md) as `[Rn]` and marked *documented* (Elgato states it) or *observed* (seen on a real machine, not promised).
 
 ## Problem
 
-You want a given kind of Stream Deck (same geometry, e.g. every XL) to show **the same profile setup at every computer you sit at**, kept in sync automatically, without exporting, importing and shuffling profiles by hand. One or more decks may be shared between computers through a Thunderbolt or KVM switch, or each desk may have its own deck of the same model.
+You want a given kind of Stream Deck (same geometry, e.g. every XL) to show **the same profile setup at every computer you sit at**, kept in sync automatically, without exporting, importing and shuffling profiles by hand. One or more decks may be shared between computers through a Thunderbolt or KVM switch, or each desk may have its own deck of the same model. One computer may also have **several decks of the same geometry on the same setup** (e.g. two XLs): each is a full peer, so an edit on either reaches the other and every other computer.
 
 The Stream Deck app keeps profiles per machine and has no automatic cross-machine sync for desktop decks, only manual export/import ([R18], documented by absence). It also has **no device-type → profile grouping**: each profile belongs to exactly one device ([streamdeck-config-model.md](../streamdeck-config-model.md)). schrodeck adds that missing layer, called a **setup** (ADR [0029](../adr/0029-problem-statement-and-setup-model.md)).
 
@@ -47,7 +47,7 @@ The Stream Deck app keeps profiles per machine and has no automatic cross-machin
 | **Member copy** | A profile schrodeck created for a setup on one host's chosen device, named `schrodeck - <cols>x<rows> - <name>`. Created at `init`/`share` (from the template) and at `join`/`subscribe` (always a **new** profile). **Every member copy is kept up to date**, whether or not it is the deck's active profile, and all member copies are peers. Profiles that aren't member copies are never touched. |
 | **DETACHED(reason)** | A member copy whose host dropped out of the setup after an unexpected change. The profile is never destroyed (left as-is while detached; archived as `<name>-<datestamp>` if the user rejoins onto the same deck), nothing syncs for it there, and it stays that way until `schrodeck resolve` (ADR [0030](../adr/0030-fail-closed-detach.md), [0026](../adr/0026-profile-identity.md)). |
 | **Store** | The shared cloud folder. Its format is [contract D](../contracts/store-format.md). |
-| **Revision / head** | Each version of a shared profile is an immutable **revision** in the store: a record of its content hash, its stored tree and its parent revision(s). This is schrodeck's own record in the shared folder, modeled on git's idea but **not** a git commit; in these docs "commit" only ever means git. Each host owns a **head** naming the revision its copy is at. **R** is the newest revision all live heads descend from (equal-content *tips* count as one; history is matched by ancestry only, so an undo to earlier content is a new revision that wins). |
+| **Revision / head** | Each version of a shared profile is an immutable **revision** in the store: a record of its content hash, its stored tree and its parent revision(s). This is schrodeck's own record in the shared folder, modeled on git's idea but **not** a git commit; in these docs "commit" only ever means git. Each **member copy** has a **head**, written only by its host, naming the revision that copy is at (a host with two decks on one setup has two). **R** is the newest revision all live heads descend from (equal-content *tips* count as one; history is matched by ancestry only, so an undo to earlier content is a new revision that wins). |
 
 ## Facts the design rests on
 
@@ -104,7 +104,7 @@ For each member copy on each host:
 ```
 L = hash(normalize(local copy))
 R = the revision that subsumes every live head (none if InFlight or Forked)
-B = (revision, local_hash) this host last synced for this copy
+B = (revision, local_hash) this copy last synced
 ```
 
 The full decision table is in ADR 0005. In short:
@@ -119,7 +119,8 @@ The full decision table is in ADR 0005. In short:
 - Live heads don't converge → **Forked** → no host applies anything until `resolve`.
 - Tombstone → the copy is detached by unshare and resumes on `reshare`; version mismatch → read-only until upgrade/`migrate`; schema guard → pause until `doctor`. These are **expected** pauses (ADRs [0025](../adr/0025-deletion-and-unshare.md), [0027](../adr/0027-store-lifecycle.md), [0015](../adr/0015-schema-guard.md)).
 - **Anything unexpected** (the member copy deleted in the app, the store copy lost, the store went backwards, the deck gone, the copy re-bound to another device, a foreign device id, a variable collision, an occupied canonical folder, a stale-version edit, an unreadable apply journal, or any unclassified condition) → **DETACHED(reason)**: that Mac drops out of that setup, the profile is left exactly as it is, nothing syncs for it there, one notification is sent, and it persists until `schrodeck resolve <setup>` (rejoin, which archives an old copy on the same deck as `<name>-<datestamp>` and tells you; publish this copy where the cause allows; or unmap). The full expected/unexpected classification is in ADR [0030](../adr/0030-fail-closed-detach.md).
-- A host that lost its local state rebuilds B from its own head.
+- A host that lost its local state rebuilds each copy's B from that copy's head.
+- Two copies of one setup on **one** host are two heads, so concurrent edits on both fork exactly like edits on two hosts; neither is lost (issue #5).
 
 ![sync state diagram](../sync-states.png)
 
@@ -183,7 +184,7 @@ ADR [0009](../adr/0009-store-write-protocol.md), [0023](../adr/0023-store-freshn
 
 - **Every file has exactly one writer**: its path contains the writing host's `host_id`. Identical revisions and trees from two hosts are stored once per writer, so even those never share a path. The common `config.toml` is the only exception: rarely written, with `config resolve`.
 - **No raw device ids in the store:** stored trees hold `{{DEVICE}}` where the app wrote `Device.UUID` (which embeds the deck's USB serial).
-- **Push:** stage and verify the tree → rename it into this host's `trees/<digest>/<host_id>/` (never trusting another host's copy) → write the revision → wait (bounded) for the provider to confirm upload → move this host's head **last** → only then set B.
+- **Push:** stage and verify the tree → rename it into this host's `trees/<digest>/<host_id>/` (never trusting another host's copy) → write the revision → wait (bounded) for the provider to confirm upload → move this copy's head (`heads/<host_id>/<copy_id>.json`, one per member copy; `copy_id` is a one-way hash, so no deck serial reaches the store) **last** → only then set B.
 - **Read:** a head whose revision, or whose tip tree, is incomplete means InFlight; ordering on the wire doesn't matter.
 - **Freshness:** before reading and after writing, ask the provider via File Provider: read only when every file is `current`; a push is confirmed once uploaded. A profile stuck InFlight for more than an hour raises one alarm. The limit: `current` means the newest version *this host knows of*. Observing the `current` state on Dropbox is a gate for M2.
 - **Lifecycle:** `FORMAT` / `norm_version` changes go through an explicit `migrate`, whose rebase revision makes every old head an ancestor, so one stale host can't freeze the upgraded ones; hosts on older versions go read-only. An edit an old host pushes after `migrate` is reported on every upgraded host as a **pending older-version edit** (never ignored, never a fork), and `migrate` refuses while any profile is Forked (review F42, F43). **GC deletes tree copies only; revisions are kept forever**, so history can always be walked. `uninstall` never touches profiles.

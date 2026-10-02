@@ -1,6 +1,6 @@
 # 0022. Onboarding: `init` creates a setup from a template; `join` adds a new member copy
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F13, F16): join never replaces existing local profiles, subscribing is chosen in the rundown, and the agent install moves to the milestone that can do it safely. Revised 2026-10-01 (reframe: template-seeded setups): `init` picks a device and a template and creates a new named member copy; `join` lists only geometry-compatible setups and always creates a new profile on a chosen destination device; the old rename suggestion is replaced by the member copy's fixed name. Revised 2026-10-01 (review F50, F52, F53; owner's decisions): `init`/`share` **publish first** (root built read-only from the template) and then install on the first Mac through the ordinary install path; a re-subscribe onto a deck that still holds an old copy **archives** it and says so in the rundown.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F13, F16): join never replaces existing local profiles, subscribing is chosen in the rundown, and the agent install moves to the milestone that can do it safely. Revised 2026-10-01 (reframe: template-seeded setups): `init` picks a device and a template and creates a new named member copy; `join` lists only geometry-compatible setups and always creates a new profile on a chosen destination device; the old rename suggestion is replaced by the member copy's fixed name. Revised 2026-10-01 (review F50, F52, F53; owner's decisions): `init`/`share` **publish first** (root built read-only from the template) and then install on the first Mac through the ordinary install path; a re-subscribe onto a deck that still holds an old copy **archives** it and says so in the rundown. Revised 2026-10-02 (issue #5, owner's decision): `subscribe` may add a second (or further) member copy of a setup on the **same** Mac, onto another compatible deck; each copy is a full peer with its own head.
 
 ## Context
 
@@ -56,7 +56,7 @@ stateDiagram-v2
 
    If the first sync fails, everything rolls back, no head or host file is written, and no agent is installed.
 
-`schrodeck subscribe` later on a joined Mac runs steps 2 to 6 for one more setup.
+`schrodeck subscribe` later on a joined Mac runs steps 2 to 6 for one more setup, **or for a setup this Mac already holds, onto another compatible deck** (issue #5). Example: `init` makes the root from a profile on deck 1, then `schrodeck subscribe <setup> --deck <deck 2>` adds deck 2. Deck 2's copy is a **full peer**, not a mirror (owner's decision): an edit on it syncs to deck 1 and to every other Mac, and it has its own head ([contract D](../contracts/store-format.md)). A deck that already holds a live member copy of the setup is not offered as a destination; a deck holding a detached or unmapped one is offered, with the archive step in the rundown.
 
 **Joiners never bring their own config into the system.** Merging two computers' existing configurations is out of scope. It can be done by hand (quit the Stream Deck app and edit the profile files, or copy buttons in the app), at the user's own risk. schrodeck won't manage it, and the documentation says so.
 
@@ -88,6 +88,7 @@ No check yet; to be written in the plan. Required tests:
 - A join whose first apply fails leaves no LaunchAgent, no `hosts/<host_id>.toml`, and no head.
 - Preflight fails cleanly when the app is absent.
 - With an existing local profile of the same name on the destination, join creates a new profile and leaves the existing one untouched.
+- `subscribe` of a setup this Mac already holds, onto a second compatible deck ⇒ a second member copy in its own canonical folder, a second head in the store, and no write-open on the first copy. An edit on the second copy reaches the first copy and other Macs. Known-bad: the deck already holding a live copy must not be offered.
 
 ## References
 

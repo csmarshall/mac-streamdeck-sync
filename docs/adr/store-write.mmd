@@ -8,8 +8,8 @@ stateDiagram-v2
     Confirm --> Unconfirmed: wait timed out (5 min)<br/>or provider freshness Unknown
     Confirm --> MoveHead: provider reports tree and revision uploaded
     Unconfirmed --> MoveHead: move head anyway, status says<br/>pushed, upload unconfirmed
-    MoveHead --> SetB: heads/HOST.json rewritten LAST<br/>(only this host writes it)
-    SetB --> Reader: local B set only after the head write
+    MoveHead --> SetB: heads/HOST/COPY.json rewritten LAST<br/>(one per member copy, only this host writes it)
+    SetB --> Reader: this copy's B set only after the head write
     Abort --> [*]: remove tmp, log ERROR, notify
     Reader --> InFlight: provider not current, or a revision<br/>or the tip tree is missing or fails its digest
     Reader --> Forked: live heads don't converge

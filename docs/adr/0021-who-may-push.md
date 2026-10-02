@@ -1,6 +1,6 @@
 # 0021. Any host whose copy changed may push
 
-Status: Accepted 2026-10-01 (issue #2 remains open only as a confirmation; it no longer blocks this decision). Revised 2026-10-01 (review F1, F13): pushes go through per-host heads, and a push is refused while the profile is Forked or the schema guard is tripped. Revised 2026-10-01 (review F47): the Ahead parent is R everywhere.
+Status: Accepted 2026-10-01 (issue #2 remains open only as a confirmation; it no longer blocks this decision). Revised 2026-10-01 (review F1, F13): pushes go through per-host heads, and a push is refused while the profile is Forked or the schema guard is tripped. Revised 2026-10-01 (review F47): the Ahead parent is R everywhere. Revised 2026-10-02 (issue #5, owner's decision): a push moves only the pushing copy's head; heads are per member copy.
 
 ## Context
 
@@ -16,7 +16,7 @@ The first design allowed a push only from a host where a compatible deck was att
 
 Every revision and head still records `updated_at` (UTC) and `updated_by` ([contract D](../contracts/store-format.md)). These are shown in `status`, notifications and the log, but never used to choose direction (see "Timestamps" in [0005](0005-direction-detection-three-way-hash.md)).
 
-A push (Ahead) writes a revision whose parent is **R**, which at that moment is ≡ this host's `B.revision` (review F47), and moves only this host's head ([0009](0009-store-write-protocol.md)), so two hosts pushing at once produce a detectable fork, not a lost update. **A push is refused** while the profile is Forked (except to preserve a Diverged host's local edit, [0007](0007-conflict-policy.md)), while the schema guard is tripped ([0015](0015-schema-guard.md)), while the collision guard finds another host's literal value ([0006](0006-normalization-and-variables.md)), and while the profile is held ([0011](0011-history-and-rollback.md)).
+A push (Ahead) writes a revision whose parent is **R**, which at that moment is ≡ this copy's `B.revision` (review F47), and moves only this copy's head ([0009](0009-store-write-protocol.md)), so two hosts, or two copies on one host, pushing at once produce a detectable fork, not a lost update. **A push is refused** while the profile is Forked (except to preserve a Diverged host's local edit, [0007](0007-conflict-policy.md)), while the schema guard is tripped ([0015](0015-schema-guard.md)), while the collision guard finds another host's literal value ([0006](0006-normalization-and-variables.md)), and while the profile is held ([0011](0011-history-and-rollback.md)).
 
 A host whose copy did **not** change (L == B) can never push, attached or not. The only risk the attached-only rule guarded against was a false L ≠ B caused by the app's own rewrites. That is normalization's job ([0006](0006-normalization-and-variables.md)), and the per-profile **apply** backoff in [0012](0012-triggers.md) bounds any ping-pong a normalization bug could cause (each host's push is triggered by the other host's apply).
 

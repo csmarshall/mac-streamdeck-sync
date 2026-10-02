@@ -1,6 +1,6 @@
 # 0009. Store write protocol: single-writer heads over immutable revisions and trees
 
-Status: Accepted 2026-10-01. Revised 2026-10-01 (review F1, F8, F14, F22): replaced the shared `current/` + `current.json` (last writer wins) with per-host heads and content-addressed, write-once revisions and trees. Revised 2026-10-01 (review round 2: F25, F26, F27, F34): every path is host-scoped (even identical revisions and trees are stored once per writer), revisions are never garbage-collected, stored trees hold `{{DEVICE}}` instead of raw device ids, equal-hash tips are converged, and B is set only after the head write.
+Status: Accepted 2026-10-01. Revised 2026-10-01 (review F1, F8, F14, F22): replaced the shared `current/` + `current.json` (last writer wins) with per-host heads and content-addressed, write-once revisions and trees. Revised 2026-10-01 (review round 2: F25, F26, F27, F34): every path is host-scoped (even identical revisions and trees are stored once per writer), revisions are never garbage-collected, stored trees hold `{{DEVICE}}` instead of raw device ids, equal-hash tips are converged, and B is set only after the head write. Revised 2026-10-02 (issue #5, owner's decision): heads are per member copy (`heads/<host_id>/<copy_id>.json`), so one Mac can hold several peer copies of a setup.
 
 ## Context
 
@@ -14,7 +14,7 @@ The single definition of the layout, the record fields and the step-by-step writ
 
 - `trees/<tree_digest>/<host_id>/` holds full profile trees, write-once, with variables and `{{DEVICE}}` as placeholders ([0006](0006-normalization-and-variables.md)). A push always uploads its own copy rather than trusting another host's.
 - `revisions/<revision_id>/<host_id>.json` holds write-once records containing exactly the id-hashed fields (`hash`, `tree`, `parents`, `norm_version`, `fingerprint`, `kind`), so every writer's bytes are identical. Author, time and app version live in the writer's head and event line.
-- `heads/<host_id>.json` is each host's own pointer, written **last** in a push; the host's local B is set only after that write succeeds.
+- `heads/<host_id>/<copy_id>.json` is one member copy's pointer, written only by its host, **last** in a push; that copy's local B is set only after that write succeeds. Heads are per copy, not per host, because one Mac may hold several copies of a setup on several decks (issue #5): with one head per host, two copies pushing from the same base would overwrite each other's head and silently drop an edit. `copy_id` is a one-way hash, so the deck's serial never reaches the store ([contract D § layout](../contracts/store-format.md#layout)). Grouping by `host_id` keeps the single writer in the path and makes `forget-host` one directory.
 - R is the revision that subsumes every live head; tips with equal `hash` are converged, not forked. No R means **Forked**, which is detectable.
 - A reader first checks freshness with the provider; then a head whose revision, or whose tip tree, is missing or digest-invalid makes the profile **InFlight**: it retries next tick and never applies.
 - **Revisions are never garbage-collected**; only tree copies are, and never a pinned one ([contract D § garbage collection](../contracts/store-format.md#garbage-collection-trees-only), [0027](0027-store-lifecycle.md)).
@@ -45,6 +45,7 @@ No check yet; to be written in the plan (see also [contract D § enforced by](..
 - A head whose tree is missing a file or has a truncated file ⇒ InFlight, no apply.
 - Extra files (`.DS_Store`, `x (conflicted copy).json`, `.icloud`) in a tree ⇒ same `tree_digest`, not InFlight.
 - Two simulated hosts pushing concurrently ⇒ Forked on both. Known-bad: the old shared-file protocol loses one edit in the same test.
+- Two member copies on **one** simulated host, both pushing from the same base ⇒ Forked, both revisions reachable from a live head. Known-bad: one head per host loses one revision in the same test (issue #5).
 - An unknown or newer `FORMAT` ⇒ refuse to write.
 - The single-writer property: over a simulated multi-host run, **including two hosts producing the identical revision and tree**, every store path is written by at most one host (except `config.toml`). Known-bad: a host-less revision path must fail it.
 - No raw device id reaches the store: every stored tree has `{{DEVICE}}` and no `@(` device string.

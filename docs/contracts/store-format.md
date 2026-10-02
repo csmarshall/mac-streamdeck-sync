@@ -17,6 +17,8 @@ Write-once objects that two hosts might both produce (identical revisions, ident
 
 Revised 2026-10-01 (review F26): the first version let two hosts write the same `revisions/<id>.json`, `trees/<digest>/` and `tombstone.json`.
 
+Revised 2026-10-02 (issue #5, owner's decision): heads are per **member copy** (`heads/<host_id>/<copy_id>.json`), not per host, so one Mac can hold several peer copies of one setup (one per deck). Every path still contains its only writer's `host_id`. A host writes its store paths from one process at a time (the run lock, ADR [0012](../adr/0012-triggers.md)), so its member copies never race on a path; two copies on one host that produce the identical revision or tree share that host's single write-once, byte-identical copy of it.
+
 ## Layout
 
 ```
@@ -26,7 +28,7 @@ Revised 2026-10-01 (review F26): the first version let two hosts write the same 
   hosts/<host_id>.toml                          per-host config: friendly name, variable values, subscriptions, pins. Owner: that host
   profiles/<profile_id>/
     profile.json.<host_id>                      write-once at init/share: the setup record {profile_id, geometry, name}. Owner: the host that created the setup from its template (ADR 0029). The template itself is never recorded or stored
-    heads/<host_id>.json                        this host's head for this profile. Owner: that host
+    heads/<host_id>/<copy_id>.json              head of one member copy of this profile on that host. Owner: that host
     revisions/<revision_id>/<host_id>.json          revision record, written once by each host that produced it
     trees/<tree_digest>/<host_id>/              stored tree, written once by each host that uploaded it
     tombstones/<host_id>.json                   this host's unshare records (append-only list). Owner: that host
@@ -39,6 +41,8 @@ Revised 2026-10-01 (review F26): the first version let two hosts write the same 
 ```
 
 `profile_id` is a random UUIDv4 assigned by `share` (ADR [0026](../adr/0026-profile-identity.md)). `host_id` is defined in ADR [0010](../adr/0010-host-identity-and-config-layering.md).
+
+`copy_id` names one **member copy**: `uuid5(NAMESPACE_SCHRODECK, host_id + ":" + profile_id + ":" + deck_key)` (ADR [0026](../adr/0026-profile-identity.md)). A host can hold several member copies of one profile, one per chosen deck, so heads are kept per copy (issue #5). `deck_key` embeds the deck's USB serial ([R9](../references.md)), so it never appears in a store path or record; only this one-way hash of it does. `copy_id` is opaque but not secret: someone who already knows the `host_id`, the `profile_id` and a candidate serial could confirm the guess, which is acceptable for a folder only the user's own machines replicate. It includes `host_id` so the same physical deck behind a switch gets a different `copy_id` on each Mac, and the store doesn't reveal which hosts share a deck. Heads are grouped under `heads/<host_id>/` so the single writer stays visible in the path and `forget-host` removes one directory. Everything in a `copy_id` is known to the host after losing its local state, so it can find its heads again (ADR [0005](../adr/0005-direction-detection-three-way-hash.md) Recover).
 
 ## Records
 
@@ -55,7 +59,7 @@ Revised 2026-10-01 (review F26): the first version let two hosts write the same 
 
 `revision_id = sha256(JCS(revision record))`. Author and time are **not** in the revision. Who wrote a revision, when, and with which app version is per-host metadata: the writer's head (below) and its event line (ADR [0017](../adr/0017-observability.md)). `status` shows "updated by <host>" from the first head and event that reference the revision.
 
-**Head** (`heads/<host_id>.json`, owned by that host): `{revision_id, updated_at, app_version}`. It means "this host's copy of the profile is at `revision_id`". `updated_at` (UTC) and `app_version` are display-only (ADR 0005). A host rewrites its own head only after a successful push or apply, and B is set only after that write succeeds (review F34).
+**Head** (`heads/<host_id>/<copy_id>.json`, owned by that host): `{revision_id, updated_at, app_version, deck_model}`. It means "this member copy of the profile is at `revision_id`". `updated_at` (UTC), `app_version` and `deck_model` (the deck's model code from the app's device list, e.g. `20GAT9902`, never its serial; it lets `status` tell two copies on one host apart) are display-only (ADR 0005). A host rewrites a copy's head only after a successful push or apply of that copy, and that copy's B is set only after that write succeeds (review F34).
 
 **Tree** (`trees/<tree_digest>/<host_id>/`, write-once): the full profile directory as the app wrote it, with variables replaced by placeholders (ADR [0006](../adr/0006-normalization-and-variables.md)), **including the reserved placeholder `{{DEVICE}}` in place of every `Device.UUID` value**. A raw device id, which embeds the deck's USB serial ([R9](../references.md)), therefore never reaches the shared folder (review F27). Runtime fields are kept; they are excluded only from `hash`. `tree_digest` = sha256 over the sorted lines `<NFC relative path>\0<sha256(file bytes)>\n` for every file under the allow-list in [contract C](profile-format.md#file-allow-list), computed on the stored (placeholder) bytes. The folder's own name is not part of the relative paths.
 
@@ -72,7 +76,7 @@ Revised 2026-10-01 (review F26): the first version let two hosts write the same 
 
 This is evaluated per profile, **after** the freshness check: if the provider does not report the profile's store files as current, the profile is InFlight and nothing below runs (review F30).
 
-1. Read every `heads/*.json`. Resolve each head's `revision_id` and its ancestors through `revisions/` (any writer's copy whose JCS bytes hash to the id). Revisions are never garbage-collected, so a missing revision can only mean the sync client hasn't delivered it yet → **InFlight**.
+1. Read every `heads/*/*.json` (one per member copy, on every host). Resolve each head's `revision_id` and its ancestors through `revisions/` (any writer's copy whose JCS bytes hash to the id). Revisions are never garbage-collected, so a missing revision can only mean the sync client hasn't delivered it yet → **InFlight**.
 1a. **Live tip** (review F49): the revision of a live head (after the version filter in rule 4) that is **not an ancestor of another live head's revision**. A stale head sitting on an ancestor is never a tip, even if its hash equals a newer tip's, so it can't win the tie-break in rule 5 and orphan the newer chain.
 2. **Equivalence (tips only).** Two **live tips** are *equivalent* (≡) if they are the same revision, or have the same `hash` under the same `norm_version`. Equivalent tips have identical normalized content, so they are never treated as a fork (review F27, owner's decision). Equivalence is **never** evaluated against ancestors (review F40): returning to earlier content (an undo, or a `rollback`) produces a new revision whose hash equals an ancestor's, and that revision must win over the tip it descends from.
 3. **Subsumption.** Revision X *subsumes* head H **iff** H's revision is X or an ancestor of X (ancestry only), **or** H's revision and X are both live tips and H's revision ≡ X.
@@ -81,9 +85,11 @@ This is evaluated per profile, **after** the freshness check: if the provider do
 6. Otherwise (two live tips that are neither ancestry-related nor equivalent) → **Forked**. There is no R until a `resolve` revision whose parents include every tip.
 7. To apply R, its tree must be present: at least one writer's copy of `trees/<R.tree>/` must pass its digest check. If none does → **InFlight**.
 
-A head belonging to a retired host is simply subsumed by R and changes nothing. No logic counts hosts or needs a membership list.
+A head belonging to a retired host is simply subsumed by R and changes nothing. No logic counts hosts or copies, or needs a membership list.
 
-**Store went backwards** (review F34): if R does not subsume this host's own `B.revision` (for example, the host's head was lost, or a provider restore reverted the store), that copy becomes **DETACHED(store-went-backwards)** ([ADR 0030](../adr/0030-fail-closed-detach.md)) and notifies once. It is never read as Behind, because applying R would silently revert content. `schrodeck resolve` chooses. Detached copies are local state only: a detached host's head stays where it was and remains an ordinary (older) head for everyone else's R.
+**Several copies on one host** are just several heads (issue #5). Nothing above groups heads by host, so two copies on one Mac that both change from the same base produce two tips: the profile is Forked (or the later copy Diverged, depending on the order the host evaluates them), exactly as for two Macs, and neither revision is lost. A copy left unchanged while its sibling pushed is simply Behind and is applied.
+
+**Store went backwards** (review F34): if R does not subsume a copy's own `B.revision` (for example, the copy's head was lost, or a provider restore reverted the store), that copy becomes **DETACHED(store-went-backwards)** ([ADR 0030](../adr/0030-fail-closed-detach.md)) and notifies once. It is never read as Behind, because applying R would silently revert content. `schrodeck resolve` chooses. Detached copies are local state only: a detached copy's head stays where it was and remains an ordinary (older) head for everyone else's R.
 
 ## Write protocol (push)
 
@@ -91,8 +97,8 @@ A head belonging to a retired host is simply subsumed by R and changes nothing. 
 2. Rename it to `trees/<tree_digest>/<host_id>/`. If this host's copy already exists and passes its digest check, delete the staged copy. **Another host's copy is never trusted as a substitute**: it may be mid-GC on its writer or partially delivered (review F25).
 3. Write `revisions/<revision_id>/<host_id>.json` via stage + rename (skip only if this host's own copy exists and is valid).
 4. Wait (bounded, default 5 minutes) for the provider to report the tree and revision as uploaded (ADR [0023](../adr/0023-store-freshness-via-file-provider.md)). The head is moved only after that, so other hosts don't see a head before its data can reach them. If the provider reports `Unknown` freshness, or the wait times out, move the head anyway: readers' InFlight rule makes that safe. `status` then says "pushed, upload unconfirmed".
-5. Rewrite `heads/<host_id>.json` **last**, via stage + rename.
-6. Only after step 5 succeeds: set this host's local B := (revision_id, L).
+5. Rewrite this copy's `heads/<host_id>/<copy_id>.json` **last**, via stage + rename.
+6. Only after step 5 succeeds: set this copy's local B := (revision_id, L).
 
 Readers never trust a head whose revision or tree is not fully present and digest-valid. Ordering on other hosts therefore doesn't matter: a head that arrives before its data only yields InFlight.
 
@@ -119,5 +125,6 @@ A rollback or re-materialization whose target tree has been collected from the s
 - **Fork detection:** two heads with the same parent and different hashes ⇒ Forked on every host. **Equivalence:** two heads with different revision ids but the same hash and `norm_version` ⇒ InSync, not Forked.
 - **In flight:** a head whose revision is missing, or whose R tree is missing a file or has a truncated file ⇒ InFlight, no apply. Extra files (`.DS_Store`, `* (conflicted copy)*`, `.icloud` placeholders) are outside the allow-list and don't change `tree_digest`.
 - **GC never wedges R:** 50 revisions with Y = 2, then GC on every host ⇒ R still derivable on every host, with no InFlight. Known-bad: a GC that also deletes revisions must wedge this test.
-- **Store went backwards:** a host's own head reverted to an ancestor ⇒ DETACHED(store-went-backwards), no apply, persists until `resolve`.
-- **No raw device ids in the store:** every stored tree contains `{{DEVICE}}` and no `@(` device id string (scan test over a store written from real-shaped fixtures).
+- **Store went backwards:** a copy's own head reverted to an ancestor ⇒ DETACHED(store-went-backwards), no apply, persists until `resolve`.
+- **Several copies on one host (issue #5):** one host with two member copies of one profile, both edited from the same B before a run ⇒ both revisions are reachable from a live head, the profile is Forked on every host (or the second copy Diverged, depending on evaluation order), and nothing is applied. **Known-bad:** the same simulation with one head per host (`heads/<host_id>.json`) overwrites the first copy's head with the second's, so the first revision is reachable from no live head; the test must fail against it. And: one copy edited, its sibling untouched ⇒ the sibling goes Behind and is applied, and the edited copy stays InSync.
+- **No raw device ids in the store:** every stored tree contains `{{DEVICE}}` and no `@(` device id string, and no store path, head or host file contains a `deck_key` (scan test over a store written from real-shaped fixtures, including a host with two decks on one setup).
