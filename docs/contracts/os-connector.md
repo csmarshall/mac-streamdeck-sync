@@ -103,8 +103,11 @@ type AppPrefs interface {
 ### 6. `Watcher`: change notification
 
 ```go
+type Event struct {
+    Paths []string // changed paths seen in one debounce window; a hint, never truth
+}
 type Watcher interface {
-    Watch(paths []string, debounce time.Duration) (<-chan Event, error)
+    Watch(ctx context.Context, paths []string, debounce time.Duration) (<-chan Event, error) // the channel closes when ctx ends
 }
 ```
 Invariant: **events are hints, never truth.** The core always re-hashes, so missed or duplicated events are safe. The timer (via `Scheduler`) is the safety net (ADR [0012](../adr/0012-triggers.md)).
