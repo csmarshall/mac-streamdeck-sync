@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-package cli
+package main
 
 import (
 	"bytes"
@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/csmarshall/schrodeck/internal/cli"
 )
 
 // buildBinary compiles the real entry point so the tests below pin cmd/schrodeck/main.go's wiring, not just the in-process logger.
@@ -46,7 +48,7 @@ func runBinary(t *testing.T, bin, logLevel string, args ...string) (stdout, stde
 func TestBinaryDebugLogsStayOffStdout(t *testing.T) {
 	bin := buildBinary(t)
 	stdout, stderr, code := runBinary(t, bin, "debug", "doctor", "--json")
-	if code != ExitOK {
+	if code != cli.ExitOK {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
 	if lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n"); len(lines) != 1 || !strings.HasPrefix(lines[0], `{"schema_version":1,`) {
@@ -60,8 +62,8 @@ func TestBinaryDebugLogsStayOffStdout(t *testing.T) {
 func TestBinaryRejectsInvalidLogLevel(t *testing.T) {
 	bin := buildBinary(t)
 	stdout, stderr, code := runBinary(t, bin, "loud", "version")
-	if code != ExitUsage {
-		t.Fatalf("exit %d, want %d", code, ExitUsage)
+	if code != cli.ExitUsage {
+		t.Fatalf("exit %d, want %d", code, cli.ExitUsage)
 	}
 	if stdout != "" {
 		t.Fatalf("stdout should be empty, got %q", stdout)
